@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    name: flake eval + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+            substituters = https://cache.nixos.org https://nix-community.cachix.org https://microvm.cachix.org https://claude-code.cachix.org
+            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs= microvm.cachix.org-1:oXnBc6hRE3eX5rSYdRyMYXnfzcCxC7yKPTbZXALsqys= claude-code.cachix.org-1:YeXf2aNu7UTX8Vwrze0za1WEDS+4DuI2kVeWEE4fsRk=
+
+      - name: Magic Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Evaluate flake outputs
+        run: |
+          nix flake show --json > /dev/null
+          nix eval .#nixosConfigurations.lagrange.config.system.build.toplevel.drvPath
+          nix eval .#nixosConfigurations.installer.config.system.build.toplevel.drvPath
+
+      - name: Build admin service
+        run: nix build .#lagrange-admin -L
+
+      - name: Run cheap checks
+        run: |
+          nix build .#checks.x86_64-linux.repo-vm-eval -L
+          nix build .#checks.x86_64-linux.admin-service-tests -L
+
+  vm-tests:
+    name: NixOS VM tests
+    runs-on: ubuntu-latest
+    needs: eval
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+            substituters = https://cache.nixos.org https://nix-community.cachix.org https://microvm.cachix.org https://claude-code.cachix.org
+            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs= microvm.cachix.org-1:oXnBc6hRE3eX5rSYdRyMYXnfzcCxC7yKPTbZXALsqys= claude-code.cachix.org-1:YeXf2aNu7UTX8Vwrze0za1WEDS+4DuI2kVeWEE4fsRk=
+
+      - name: Magic Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: KVM availability
+        run: |
+          test -e /dev/kvm || { echo "::warning::no /dev/kvm — tests will fall back to TCG (slow)"; }
+          ls -l /dev/kvm || true
+
+      - name: admin-service-smoke
+        run: nix build .#checks.x86_64-linux.admin-service-smoke -L
+
+      - name: cache-layer-up
+        run: nix build .#checks.x86_64-linux.cache-layer-up -L

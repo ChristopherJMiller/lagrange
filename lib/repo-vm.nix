@@ -1,0 +1,237 @@
+{ nixpkgs
+, microvm
+, claude-code
+, system ? "x86_64-linux"
+}:
+
+# mkRepoVm: build a NixOS configuration for one repo-VM.
+#
+# Used by the admin service in imperative mode: it generates a tiny per-VM
+# flake at /var/lib/microvms/<name>/flake.nix that imports this lagrange
+# repo as an input and calls mkRepoVm with the per-VM args.
+#
+# Hypervisor note: cloud-hypervisor, NOT firecracker. firecracker is the
+# leanest microVM but cannot virtiofs-mount /nix/store. We need that share
+# to keep VMs sub-second-warm-boot and avoid duplicating the store per-VM.
+
+{ name
+, repoUrl
+, branch ? "main"
+, vmIp
+, vmMac
+, vcpu ? 4
+, memMb ? 4096
+, balloonMb ? null
+, operatorSshKey ? null
+}:
+
+nixpkgs.lib.nixosSystem {
+  inherit system;
+
+  specialArgs = {
+    inherit microvm claude-code;
+    repoArgs = {
+      inherit name repoUrl branch vmIp vmMac vcpu memMb operatorSshKey;
+    };
+  };
+
+  modules = [
+    microvm.nixosModules.microvm
+
+    ({ config, pkgs, lib, repoArgs, ... }: {
+      system.stateVersion = "25.11";
+
+      ###### microVM configuration
+      microvm = {
+        hypervisor = "cloud-hypervisor";
+        vcpu = repoArgs.vcpu;
+        mem = repoArgs.memMb;
+        balloon = true;
+
+        shares = [
+          # Read-only host /nix/store.
+          {
+            source = "/nix/store";
+            mountPoint = "/nix/.ro-store";
+            tag = "ro-store";
+            proto = "virtiofs";
+          }
+          # Read-only shared agent config (CLAUDE.md, skills, commands).
+          {
+            source = "/var/lib/agent-shared";
+            mountPoint = "/shared";
+            tag = "shared";
+            proto = "virtiofs";
+          }
+          # Read-write per-repo persistent volume.
+          {
+            source = "/var/lib/agent-state/${repoArgs.name}";
+            mountPoint = "/persistent";
+            tag = "persistent";
+            proto = "virtiofs";
+          }
+        ];
+
+        interfaces = [{
+          type = "bridge";
+          id = "vm-${repoArgs.name}";
+          mac = repoArgs.vmMac;
+          bridge = "cachebr0";
+        }];
+      };
+
+      ###### Guest networking
+      networking = {
+        hostName = repoArgs.name;
+        useDHCP = false;
+        interfaces.eth0.ipv4.addresses = [{
+          address = repoArgs.vmIp;
+          prefixLength = 24;
+        }];
+        defaultGateway = {
+          address = "10.42.0.1";
+          interface = "eth0";
+        };
+        nameservers = [ "10.42.0.1" ];
+        # Host nftables controls egress. Guest firewall would just be noise.
+        firewall.enable = false;
+      };
+
+      ###### Toolchain
+      nixpkgs.overlays = [ claude-code.overlays.default ];
+      nixpkgs.config.allowUnfreePredicate = pkg:
+        builtins.elem (lib.getName pkg) [ "claude-code" ];
+
+      environment.systemPackages = with pkgs; [
+        claude-code
+        git
+        gh
+        nodejs_22
+        python3
+        rustup
+        go
+        ripgrep
+        fd
+        bat
+        jq
+        tmux
+        htop
+      ];
+
+      ###### Agent user (passwordless sudo; blast radius is the VM)
+      users.users.agent = {
+        isNormalUser = true;
+        home = "/home/agent";
+        extraGroups = [ "wheel" ];
+        openssh.authorizedKeys.keys = lib.optional
+          (repoArgs.operatorSshKey != null)
+          repoArgs.operatorSshKey;
+      };
+      security.sudo.wheelNeedsPassword = false;
+
+      ###### Mount layout
+      # Persistent state lives on the host under /var/lib/agent-state/<name>/,
+      # mounted at /persistent inside the VM via virtiofs. We bind a few
+      # subdirectories into the agent's home so `claude` reads/writes them
+      # directly without symlink traversal. The set is also encoded in
+      # admin-service/src/vm.rs::PERSISTENT_SUBDIRS — keep both in lockstep.
+      systemd.tmpfiles.rules = [
+        "d  /home/agent/.claude           0755 agent users -"
+        "L+ /home/agent/.claude/CLAUDE.md - - - - /shared/CLAUDE.md"
+        "L+ /home/agent/.claude/skills    - - - - /shared/skills"
+        "L+ /home/agent/.claude/commands  - - - - /shared/commands"
+
+        "d /persistent/projects 0755 agent users -"
+        "d /persistent/todos    0755 agent users -"
+        "d /persistent/statsig  0755 agent users -"
+        "d /persistent/ssh      0700 agent users -"
+        "d /persistent/work     0755 agent users -"
+        "f /persistent/gitconfig 0644 agent users -"
+      ];
+
+      fileSystems = lib.mapAttrs'
+        (target: src: lib.nameValuePair target {
+          device = "/persistent/${src}";
+          fsType = "none";
+          options = [ "bind" ];
+        })
+        {
+          "/home/agent/.claude/projects" = "projects";
+          "/home/agent/.claude/todos" = "todos";
+          "/home/agent/.claude/statsig" = "statsig";
+          "/home/agent/.ssh" = "ssh";
+          "/home/agent/work" = "work";
+          "/home/agent/.gitconfig" = "gitconfig";
+        };
+
+      ###### Package-manager cache routing
+      environment.variables = {
+        CARGO_NET_GIT_FETCH_WITH_CLI = "true";
+        npm_config_registry = "http://cache.internal:4873/";
+        GOPROXY = "http://cache.internal:3000,direct";
+        UV_INDEX_URL = "http://cache.internal:3141/root/pypi/+simple/";
+        PIP_INDEX_URL = "http://cache.internal:3141/root/pypi/+simple/";
+      };
+
+      nix.settings.substituters = [ "http://cache.internal:8080/lagrange" ];
+      nix.settings.trusted-public-keys = [
+        # Public key for the lagrange attic cache. Populated post-bootstrap;
+        # placeholder is deliberately invalid.
+        "lagrange:REPLACE_WITH_ATTIC_PUBLIC_KEY="
+      ];
+
+      # Cargo config: route through nginx HTTP cache on cache.internal:7878.
+      environment.etc."skel/.cargo/config.toml".text = ''
+        [source.crates-io]
+        replace-with = "lagrange"
+
+        [source.lagrange]
+        registry = "sparse+http://cache.internal:7878/index/"
+      '';
+
+      ###### claude remote-control session
+      # `claude remote-control` currently wants a PTY; wrap in tmux.
+      # Single-session mode (--spawn session), NOT worktree. Worktrees are
+      # the agent's choice as a subagent fan-out, not a session multiplexer.
+      systemd.services.claude-remote = {
+        description = "Claude Code remote control session for ${repoArgs.name}";
+        after = [ "network-online.target" "home-agent-work.mount" ];
+        wants = [ "network-online.target" ];
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig = {
+          Type = "simple";
+          User = "agent";
+          WorkingDirectory = "/home/agent/work";
+          Environment = [
+            "HOME=/home/agent"
+            "TERM=screen-256color"
+          ];
+          ExecStart = pkgs.writeShellScript "claude-remote-start" ''
+            set -euo pipefail
+            cd /home/agent/work
+            # Clone on first run if work/ is empty.
+            if [ ! -d .git ]; then
+              GIT_SSH_COMMAND="ssh -i /home/agent/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new" \
+                ${pkgs.git}/bin/git clone --branch ${repoArgs.branch} ${repoArgs.repoUrl} .
+            fi
+            exec ${pkgs.tmux}/bin/tmux -L claude new-session -A -s claude \
+              "${pkgs.claude-code}/bin/claude remote-control --name ${repoArgs.name} --spawn session"
+          '';
+          Restart = "on-failure";
+          RestartSec = 30;
+        };
+      };
+
+      services.openssh = {
+        enable = lib.mkDefault (repoArgs.operatorSshKey != null);
+        settings.PasswordAuthentication = false;
+      };
+
+      ###### Resource accounting — give a second OOM fence inside the VM.
+      systemd.slices."claude.slice".sliceConfig = {
+        MemoryHigh = "${toString (repoArgs.memMb * 80 / 100)}M";
+      };
+      systemd.services.claude-remote.serviceConfig.Slice = "claude.slice";
+    })
+  ];
+}

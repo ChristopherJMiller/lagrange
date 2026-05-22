@@ -1,0 +1,11 @@
+keys:
+  # Operator's personal age key. Replace with real public key before encrypting.
+  - &operator age1__PLACEHOLDER_OPERATOR_PUBKEY__
+  # Lagrange host's age key. Same — replace once the host is bootstrapped.
+  - &lagrange age1__PLACEHOLDER_LAGRANGE_HOST_PUBKEY__
+
+creation_rules:
+  - path_regex: secrets/.+\.yaml$
+    age:
+      - *operator
+      - *lagrange
