@@ -6,11 +6,12 @@
     hostname = "lagrange";
 
     # 60s reconcile loop. Day-2 ops are `git push` to the config repo.
+    # The repo is public, so we clone unauthenticated. If/when we ever flip
+    # to a private mirror, add `auth.access_token_path = ...;` here, point
+    # comin-token in satellite.yaml at a real PAT, and the rest works.
     remotes = [{
       name = "origin";
       url = "https://github.com/christopherjmiller/lagrange.git";
-      auth.access_token_path = config.sops.secrets.comin-token.path;
-      auth.username = "comin";
       branches.main = { name = "main"; };
       poller.period = 60;
     }];

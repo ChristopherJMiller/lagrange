@@ -66,10 +66,14 @@ in
   ];
 
   # dnsmasq resolves cache.internal for guests and offers DHCP on the bridge.
-  # We deliberately leave the upstream resolver to the guest's systemd-resolved
-  # so public DNS doesn't funnel through here.
+  # `no-resolv = true` means it does NOT forward upstream — it only answers
+  # the bridge's own queries. resolveLocalQueries must therefore be false,
+  # otherwise NixOS points the host's /etc/resolv.conf at 127.0.0.1 (i.e.
+  # this dnsmasq) and the host loses external DNS entirely. The host should
+  # resolve via `networking.nameservers` directly.
   services.dnsmasq = {
     enable = true;
+    resolveLocalQueries = false;
     settings = {
       interface = cacheBridgeIfname;
       bind-interfaces = true;
