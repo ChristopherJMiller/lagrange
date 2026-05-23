@@ -20,6 +20,11 @@ rustPlatform.buildRustPackage {
   # special handling needed. sqlx::query doesn't use compile-time checking,
   # so we don't need SQLX_OFFLINE.
 
+  # Tests run via the `admin-service-tests` check derivation in the flake
+  # (which overrides this back to true). Don't run them on every system
+  # rebuild — that would also block `nixos-install` on cargo test output.
+  doCheck = false;
+
   meta = with lib; {
     description = "Lagrange — repo-VM lifecycle service for Claude Code sessions";
     mainProgram = "lagrange-admin";
