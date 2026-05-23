@@ -235,7 +235,11 @@ in
   #   to root-on-host by default for rootful, which works.
   systemd.tmpfiles.rules = [
     "d /var/lib/cache/registry              0750 docker-registry docker-registry -"
-    "d /var/lib/cache/verdaccio             0750 root       root       -"
+    # Verdaccio's container image runs as the `verdaccio` user (UID 10001),
+    # not root. With rootful podman, that UID is unmapped — the container
+    # writes as host UID 10001. Pre-chown the bind mount so the in-container
+    # process can create .sinopia-db.json on first start.
+    "d /var/lib/cache/verdaccio             0750 10001      10001      -"
     "d /var/lib/cache/cargo                 0750 nginx      nginx      -"
     # atticd storage is BindPath'd by the hardened systemd unit; the
     # directory must exist before the namespace is constructed.
