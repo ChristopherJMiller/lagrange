@@ -139,6 +139,16 @@ in
         systemd
         coreutils
         util-linux
+        # sudo is required by vm.rs::run_sudo for systemctl/microvm/nixos-rebuild
+        # calls — without it the unit gets ENOENT before the privileged
+        # command can run. The actual privilege gate is the sudoers
+        # allowlist further down.
+        sudo
+        # The microvm CLI lives in the flake input, not nixpkgs. Without
+        # it on PATH, `microvm -c <name>` fails (the sudoers allowlist
+        # uses /run/current-system/sw/bin/microvm but sudo still needs
+        # to resolve `microvm` to that path through PATH).
+        self.inputs.microvm.packages.${pkgs.system}.microvm
       ];
 
       environment = {
