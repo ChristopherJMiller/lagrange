@@ -17,14 +17,20 @@ let
 
       FLAKE="${defaultFlake}"
       DISK=""
+      FORCE=0
 
       usage() {
         cat <<EOF
-      Usage: lagrange-install [--disk /dev/<X>] [--flake <ref>#lagrange]
+      Usage: lagrange-install [--disk /dev/<X>] [--flake <ref>#lagrange] [--force]
 
       Partitions the target disk with disko, installs the lagrange NixOS
       configuration, then pauses so you can drop the sops age key before
       rebooting.
+
+      Refuses to run against a disk that already carries a lagrange
+      installation (disk-main-root / disk-main-ESP partlabels present)
+      unless --force is supplied. This is intentional — re-running this
+      command wipes the disk, including the sops age key.
       EOF
       }
 
@@ -32,6 +38,7 @@ let
         case "$1" in
           --disk)  DISK="$2"; shift 2 ;;
           --flake) FLAKE="$2"; shift 2 ;;
+          --force) FORCE=1; shift ;;
           -h|--help) usage; exit 0 ;;
           *) echo "Unknown arg: $1" >&2; usage; exit 2 ;;
         esac
@@ -52,6 +59,27 @@ let
       if [[ ! -b "$DISK" ]]; then
         echo "Not a block device: $DISK" >&2
         exit 1
+      fi
+
+      # Already-installed guard: disko stamps these partlabels on every
+      # lagrange disk. If they're present, refuse without --force so an
+      # accidental re-run doesn't wipe the sops key and rootfs.
+      if [[ -b /dev/disk/by-partlabel/disk-main-root \
+         || -b /dev/disk/by-partlabel/disk-main-ESP ]]; then
+        if [[ "$FORCE" != "1" ]]; then
+          echo
+          echo "Refusing to reinstall — this disk already carries a lagrange" >&2
+          echo "installation (disk-main-root or disk-main-ESP partlabel present)." >&2
+          echo "If you really want to wipe and reinstall, pass --force." >&2
+          echo
+          echo "If you just need to re-apply config changes to an existing" >&2
+          echo "install, boot the installed system and let comin reconcile," >&2
+          echo "or mount the rootfs at /mnt and run nixos-install --root /mnt" >&2
+          echo "--flake <ref> from this ISO (no reformat)." >&2
+          exit 1
+        fi
+        echo
+        echo "--force given: proceeding with destructive reinstall."
       fi
 
       echo
