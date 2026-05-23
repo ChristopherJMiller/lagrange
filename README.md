@@ -36,7 +36,7 @@ Jump to the [operator runbook](#operator-runbook) below.
 ├── admin-service/                # the Rust glue (Axum + sqlx)
 ├── shared-agent-state/           # CLAUDE.md + skills mounted into every VM
 ├── secrets/                      # sops-nix encrypted YAML
-└── cluster/                      # K8s manifests (apply once on the cluster)
+└── cluster/                      # README pointer — manifests live in luma-homeops
 ```
 
 ## Build & test
@@ -81,7 +81,10 @@ test infra, qemu, kernel). Subsequent runs are warm-cache and finish in
    github:christopherjmiller/lagrange#lagrange`. Reboot.
 5. **Place the host's sops age key** at `/var/lib/sops-nix/key.txt`. The
    key was generated in step 1 of `secrets/README.md`.
-6. **Apply the cluster manifests:** `kubectl apply -f cluster/`.
+6. **Apply the cluster manifests.** Cluster-side WireGuard gateway,
+   admin Service / Ingress, and bearer-token Secret all live in the
+   operator's `luma-homeops` repo (not here). See `cluster/README.md`
+   for the contract between sides.
 7. **Verify the WG tunnel:** from a cluster node,
    `kubectl exec -n ops deploy/wg-gateway -- ping 10.99.0.2`.
 8. **Smoke test the admin API:** `curl -H "Authorization: Bearer $TOKEN"

@@ -1,31 +1,45 @@
-# Cluster-side manifests
+# Cluster-side manifests — moved
 
-These manifests run in the operator's Kubernetes cluster. They are *not*
-managed by comin (comin only owns the Lagrange host config).
+The cluster-side manifests (WireGuard gateway, lagrange-admin Service /
+Ingress) used to live here. They now live in the operator's homeops repo
+(`luma-homeops`) and are applied by Flux / kubectl from there.
 
-## Apply order
+This directory is kept only as a breadcrumb. Don't add yaml here.
 
-```sh
-# 1. WireGuard gateway pod (so 10.99.0.2 becomes routable in-cluster).
-kubectl apply -f wg-gateway.yaml
+## What the cluster owes Lagrange
 
-# 2. Service, Endpoints, and authentik-fronted Ingress for the admin API.
-kubectl apply -f lagrange-admin.yaml
-```
+The host config in this repo assumes the cluster provides:
 
-## Replacements before first apply
+1. **A WireGuard gateway** reachable from the LAN (or public internet) on
+   UDP/51820. Its public key + endpoint are pinned in
+   `modules/wireguard-tunnel.nix` as `clusterPeer.publicKey` /
+   `clusterPeer.endpoint`. Lagrange dials out to it; the cluster never
+   initiates inbound to Lagrange.
 
-In `wg-gateway.yaml`:
-- `REPLACE_WITH_CLUSTER_WG_PRIVATE_KEY` — `wg genkey` on a cluster node.
-- `REPLACE_WITH_LAGRANGE_WG_PUBLIC_KEY` — `wg pubkey < /var/lib/wg/privatekey`
-  on Lagrange after first boot.
+2. **Routing for `10.99.0.0/24`** inside the cluster's pod network, so
+   that consumers can reach the Lagrange admin API at `10.99.0.2:8443`
+   over the tunnel.
 
-In `lagrange-admin.yaml`:
-- `REPLACE_WITH_BEARER_TOKEN_MATCHING_LAGRANGE` — same value as
-  `admin-service-token` in `secrets/satellite.yaml`. Both must be identical.
-- `authentik.example.com` and `lagrange.internal.example` — your real hosts.
+3. **A bearer token** matching `admin-service-token` in
+   `secrets/satellite.yaml`. The cluster side holds the same value (as
+   a Kubernetes Secret in luma-homeops) and passes it as
+   `Authorization: Bearer …` on every API call.
+
+## What Lagrange owes the cluster
+
+1. **Its WireGuard public key**, derivable on the box with
+   `sudo cat /run/secrets/wg-private-key | wg pubkey`.
+   Provide this to the cluster operator when (re)keying — the cluster's
+   wg-gateway needs it in its `[Peer]` block with
+   `AllowedIPs = 10.99.0.2/32`.
+
+2. **A reachable admin API on `10.99.0.2:8443`** once both sides of the
+   tunnel are up. `GET /v1/health` returns `{"status":"ok",…}` when the
+   bearer token matches.
 
 ## Smoke test
+
+From a pod inside the cluster (run by luma-homeops):
 
 ```sh
 kubectl run -n ops curl --rm -it --image=curlimages/curl -- \
@@ -34,10 +48,3 @@ kubectl run -n ops curl --rm -it --image=curlimages/curl -- \
 ```
 
 Expected: `{"status":"ok","vms_running":0,"vms_total":0}`.
-
-End-to-end through ingress:
-
-```sh
-curl https://lagrange.internal.example/v1/health
-# → redirected to authentik for SSO; after login, returns the JSON above.
-```
