@@ -37,7 +37,10 @@ in
       prefixLength = 24;
     }];
 
-    defaultGateway = "192.168.0.1";
+    defaultGateway = {
+      address = "192.168.0.1";
+      interface = primaryWanIface;
+    };
     nameservers = [ "1.1.1.1" "8.8.8.8" ];
 
     nat = {
