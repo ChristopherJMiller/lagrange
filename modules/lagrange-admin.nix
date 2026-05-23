@@ -169,6 +169,12 @@ in
         LAGRANGE_FLAKE_REF = cfg.flakeRef;
         LAGRANGE_TOKEN_FILE = toString cfg.tokenFile;
         RUST_LOG = cfg.logLevel;
+        # Nix's tarball cache pins `github:` flake inputs for an hour by
+        # default. Per-VM flake evaluation that names lagrange as a github
+        # input would then be stuck on whichever commit was first
+        # resolved. Disable the cache so every microvm CLI invocation
+        # sees the actual current main.
+        NIX_CONFIG = "tarball-ttl = 0";
       } // lib.optionalAttrs (cfg.deployKeysTarFile != null) {
         LAGRANGE_DEPLOY_KEYS_TAR = toString cfg.deployKeysTarFile;
       } // lib.optionalAttrs (cfg.trustedSsoPeer != null) {

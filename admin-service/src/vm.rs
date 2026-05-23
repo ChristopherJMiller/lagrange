@@ -41,6 +41,14 @@ pub async fn write_vm_flake(
     mem_mb: i64,
 ) -> ApiResult<()> {
     let dir = settings.vm_flake_dir(name);
+    // Nuke and recreate so a stale flake.lock from a prior create can't
+    // pin the lagrange input to an old commit. microvm CLI generates a
+    // fresh lock from flake.nix on first eval.
+    match tokio::fs::remove_dir_all(&dir).await {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(ApiError::Io(e)),
+    }
     tokio::fs::create_dir_all(&dir).await?;
 
     let flake = format!(
