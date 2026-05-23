@@ -17,7 +17,12 @@ in
     firewall.enable = false;
     nftables.enable = false;
 
-    useNetworkd = true;
+    # Classic NixOS networking (network-{link,addresses}-* units that drive
+    # `ip` directly), not systemd-networkd. Our nixpkgs pin's systemd build
+    # appears to be shipping units that reference a systemd-networkd binary
+    # not present in its own store output — classic networking sidesteps
+    # the problem and is plenty for a single static interface.
+    useNetworkd = false;
     useDHCP = false;
 
     # Cache bridge: VM tap interfaces enslave to this; host runs the cache
@@ -37,10 +42,7 @@ in
       prefixLength = 24;
     }];
 
-    defaultGateway = {
-      address = "192.168.0.1";
-      interface = primaryWanIface;
-    };
+    defaultGateway = "192.168.0.1";
     nameservers = [ "1.1.1.1" "8.8.8.8" ];
 
     nat = {
