@@ -20,7 +20,10 @@
       kernelModules = [ ];
     };
 
-    kernelModules = [ "kvm-intel" "kvm-amd" ];
+    # AMD Ryzen 5 4600G — only kvm_amd applies. Loading kvm_intel on AMD
+    # silently fails and clutters the journal with "VMX not supported".
+    # Re-broaden if this config ever runs on an Intel host.
+    kernelModules = [ "kvm-amd" ];
     extraModulePackages = [ ];
 
     kernelParams = [
