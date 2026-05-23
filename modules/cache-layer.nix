@@ -36,14 +36,6 @@ in
   };
   users.groups.atticd = { };
 
-  # atticd's storage path is referenced by BindPaths in the hardened systemd
-  # unit, so the directory must exist before the namespace is set up — but
-  # the module itself doesn't ensure it. Pre-create with the right owner.
-  systemd.tmpfiles.rules = [
-    "d /var/lib/cache/atticd         0750 atticd atticd -"
-    "d /var/lib/cache/atticd/storage 0750 atticd atticd -"
-  ];
-
   services.atticd = {
     enable = true;
     environmentFile = config.sops.secrets.atticd-env.path;
@@ -241,6 +233,10 @@ in
     "d /var/lib/cache/registry              0750 docker-registry docker-registry -"
     "d /var/lib/cache/verdaccio             0750 root       root       -"
     "d /var/lib/cache/cargo                 0750 nginx      nginx      -"
+    # atticd storage is BindPath'd by the hardened systemd unit; the
+    # directory must exist before the namespace is constructed.
+    "d /var/lib/cache/atticd                0750 atticd     atticd     -"
+    "d /var/lib/cache/atticd/storage        0750 atticd     atticd     -"
   ];
   };
 }
