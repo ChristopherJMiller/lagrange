@@ -154,17 +154,17 @@ pub async fn microvm_create_and_start(settings: &Settings, name: &str) -> ApiRes
     let flake_path = settings.vm_flake_dir(name);
     let flake_ref = format!("{}#{}", flake_path.display(), name);
 
-    run_sudo("microvm", &["-c", name, "-f", &flake_ref]).await?;
-    run_sudo("systemctl", &["start", &format!("microvm@{}", name)]).await?;
+    run_cmd("microvm", &["-c", name, "-f", &flake_ref]).await?;
+    run_cmd("systemctl", &["start", &format!("microvm@{}", name)]).await?;
     Ok(())
 }
 
 pub async fn microvm_stop(name: &str) -> ApiResult<()> {
-    run_sudo("systemctl", &["stop", &format!("microvm@{}", name)]).await
+    run_cmd("systemctl", &["stop", &format!("microvm@{}", name)]).await
 }
 
 pub async fn microvm_restart(name: &str) -> ApiResult<()> {
-    run_sudo("systemctl", &["restart", &format!("microvm@{}", name)]).await
+    run_cmd("systemctl", &["restart", &format!("microvm@{}", name)]).await
 }
 
 pub async fn microvm_status(name: &str) -> ApiResult<String> {
@@ -179,13 +179,14 @@ pub async fn microvm_status(name: &str) -> ApiResult<String> {
 
 pub async fn microvm_destroy(name: &str) -> ApiResult<()> {
     let _ = microvm_stop(name).await;
-    run_sudo("microvm", &["-d", name]).await
+    run_cmd("microvm", &["-d", name]).await
 }
 
 pub async fn vm_journal_tail(name: &str, lines: u32) -> ApiResult<String> {
-    let out = Command::new("sudo")
+    // lagrange-admin is in the systemd-journal group, so `journalctl -u` for
+    // system units works without sudo.
+    let out = Command::new("journalctl")
         .args([
-            "journalctl",
             "-u",
             &format!("microvm@{}", name),
             "-n",
@@ -205,17 +206,19 @@ pub async fn vm_journal_tail(name: &str, lines: u32) -> ApiResult<String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-async fn run_sudo(cmd: &str, args: &[&str]) -> ApiResult<()> {
-    let mut full: Vec<&str> = vec![cmd];
-    full.extend_from_slice(args);
-    let out = Command::new("sudo")
-        .args(&full)
+/// Run a privileged-on-host command directly. systemctl actions on
+/// microvm@*.service are gated by a polkit rule that allows the microvm
+/// group; `microvm -c/-d` only needs group write on /var/lib/microvms. No
+/// setuid involved — NoNewPrivileges stays on.
+async fn run_cmd(cmd: &str, args: &[&str]) -> ApiResult<()> {
+    let out = Command::new(cmd)
+        .args(args)
         .output()
         .await
         .map_err(|e| ApiError::Subprocess(format!("spawn {cmd}: {e}")))?;
     if !out.status.success() {
         return Err(ApiError::Subprocess(format!(
-            "sudo {} {:?} exit {}: {}",
+            "{} {:?} exit {}: {}",
             cmd,
             args,
             out.status.code().unwrap_or(-1),

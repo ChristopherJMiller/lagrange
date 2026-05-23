@@ -117,9 +117,27 @@ in
       group = "lagrange-admin";
       home = cfg.stateDir;
       description = "Lagrange admin service";
-      extraGroups = [ "microvm" ];
+      # microvm:    write /var/lib/microvms (mode 0775) for `microvm -c/-d`
+      # systemd-journal: read `journalctl -u microvm@*` without sudo
+      extraGroups = [ "microvm" "systemd-journal" ];
     };
     users.groups.lagrange-admin = { };
+
+    # Allow members of the `microvm` group (i.e. lagrange-admin) to start,
+    # stop, restart, and reload microvm@*.service instances over the system
+    # bus. This is the privilege gate that used to be sudo; polkit is
+    # narrower (per-action, per-unit-glob) and lets us keep
+    # NoNewPrivileges=true on the unit.
+    security.polkit.extraConfig = ''
+      polkit.addRule(function(action, subject) {
+        if (action.id !== "org.freedesktop.systemd1.manage-units") return;
+        if (!subject.isInGroup("microvm")) return;
+        var unit = action.lookup("unit") || "";
+        if (unit.indexOf("microvm@") === 0) {
+          return polkit.Result.YES;
+        }
+      });
+    '';
 
     systemd.services.lagrange-admin = {
       description = "Lagrange admin service (repo-VM lifecycle)";
@@ -132,25 +150,16 @@ in
         ++ lib.optional cfg.requireSops "sops-nix.service";
       wantedBy = [ "multi-user.target" ];
 
-      path = [
-        # sudo MUST come from /run/wrappers/bin — pkgs.sudo's /nix/store
-        # binary lacks the setuid bit (the store is mounted nosuid for
-        # security), so calling it gives "sudo must be owned by uid 0
-        # and have the setuid bit set". NixOS exposes the wrapped setuid
-        # binary at /run/wrappers/bin/sudo. The actual privilege gate is
-        # the sudoers allowlist further down.
-        "/run/wrappers/bin"
-      ] ++ (with pkgs; [
+      path = with pkgs; [
         git
         openssh
         nix
         systemd
         coreutils
         util-linux
-        # The microvm CLI lives in the flake input, not nixpkgs. Without
-        # it on PATH, sudo can't resolve `microvm` to invoke it.
+        # The microvm CLI lives in the flake input, not nixpkgs.
         self.inputs.microvm.packages.${pkgs.system}.microvm
-      ]);
+      ];
 
       environment = {
         LAGRANGE_BIND = "${cfg.bindAddress}:${toString cfg.bindPort}";
@@ -177,10 +186,11 @@ in
         StateDirectory = "lagrange-admin";
         StateDirectoryMode = "0750";
 
-        # The unit shells out to systemctl/microvm/nixos-rebuild via sudo, so
-        # NoNewPrivileges has to stay false. The sudo allowlist (below) is
-        # what actually constrains what the service can do as root.
-        NoNewPrivileges = false;
+        # Privilege escalation goes through polkit (system bus) and group
+        # membership, not setuid, so NoNewPrivileges can stay on. systemctl
+        # and microvm calls cross the bus to PID 1 / the microvm group's
+        # writable /var/lib/microvms.
+        NoNewPrivileges = true;
         ProtectSystem = "strict";
         ProtectHome = true;
         PrivateTmp = true;
@@ -192,29 +202,18 @@ in
       };
     };
 
-    security.sudo.extraRules = [{
-      users = [ "lagrange-admin" ];
-      commands = [
-        { command = "${pkgs.systemd}/bin/systemctl"; options = [ "NOPASSWD" ]; }
-        { command = "${pkgs.systemd}/bin/journalctl"; options = [ "NOPASSWD" ]; }
-        { command = "${pkgs.systemd}/bin/machinectl"; options = [ "NOPASSWD" ]; }
-        # Use store paths so PATH shadowing can't redirect the privileged
-        # invocation to a different binary.
-        { command = "/run/current-system/sw/bin/microvm"; options = [ "NOPASSWD" ]; }
-        { command = "/run/current-system/sw/bin/nixos-rebuild"; options = [ "NOPASSWD" ]; }
-      ];
-    }];
-
     # Every path in serviceConfig.ReadWritePaths must already exist at unit
     # start, or systemd fails the mount namespace step with status 226. Create
     # all of them up front so the service is functional whether or not the
     # microvm.nix host module is in the closure (e.g. in tests).
+    # microvms is 0775 microvm:microvm so lagrange-admin (in the microvm
+    # group) can run `microvm -c/-d` without root.
     systemd.tmpfiles.rules = [
       "d ${cfg.stateDir}                  0750 lagrange-admin lagrange-admin -"
       "d ${cfg.stateDir}/deploy-keys      0700 lagrange-admin lagrange-admin -"
       "d ${cfg.stateDir}/vm-flakes        0750 lagrange-admin lagrange-admin -"
       "d ${cfg.agentStateRoot}            0750 lagrange-admin lagrange-admin -"
-      "d ${cfg.microvmStateDir}           0755 root root -"
+      "d ${cfg.microvmStateDir}           0775 microvm        microvm        -"
     ];
   };
 }
