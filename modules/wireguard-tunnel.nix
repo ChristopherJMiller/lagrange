@@ -31,14 +31,13 @@ in
     clusterPeer = {
       publicKey = lib.mkOption {
         type = lib.types.str;
-        # Replace before deploying; this placeholder is intentionally invalid.
-        default = "REPLACE_WITH_CLUSTER_GATEWAY_PUBKEY=";
+        default = "OcxQpx6ccAetqLP2tn14QyeXVh4/pwj+N4wTcgQmDEM=";
         description = "Public key of the cluster-side WireGuard gateway.";
       };
 
       endpoint = lib.mkOption {
         type = lib.types.str;
-        default = "wg.cluster.internal.example:51820";
+        default = "192.168.0.232:51820";
         description = "Public endpoint of the cluster-side gateway.";
       };
 
