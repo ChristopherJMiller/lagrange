@@ -72,12 +72,22 @@ nixpkgs.lib.nixosSystem {
           }
         ];
 
+        # Cloud-hypervisor supports only `tap` and `macvtap`, not the
+        # higher-level `bridge` type. We create a tap and slave it to
+        # cachebr0 ourselves via the tap-up hook below.
         interfaces = [{
-          type = "bridge";
+          type = "tap";
           id = "vm-${repoArgs.name}";
           mac = repoArgs.vmMac;
-          bridge = "cachebr0";
         }];
+
+        # microvm.nix's tap-up creates the tap and brings it up, but
+        # doesn't bridge it. Attach the tap to cachebr0 after creation
+        # so the guest sees the cache bridge subnet (and via NAT, the
+        # outside world).
+        binScripts.tap-up = lib.mkAfter ''
+          ${pkgs.iproute2}/bin/ip link set 'vm-${repoArgs.name}' master cachebr0
+        '';
       };
 
       ###### Guest networking
