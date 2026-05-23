@@ -52,8 +52,9 @@ in
   i18n.defaultLocale = "en_US.UTF-8";
   console.keyMap = "us";
 
-  # KVM + microvm prerequisites.
-  boot.kernelModules = [ "kvm-intel" "kvm-amd" "tun" "vhost_net" ];
+  # KVM + microvm prerequisites. kvm-amd vs kvm-intel is set in
+  # ./hardware.nix (currently kvm-amd for the Ryzen 4600G).
+  boot.kernelModules = [ "tun" "vhost_net" ];
 
   # Substituters: pull from the operator's cluster cache too once it exists.
   nix = {
