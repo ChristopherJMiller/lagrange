@@ -71,10 +71,12 @@ in
       }];
     };
 
-    # Make sure WG comes up after sops has placed the private key.
-    systemd.services."wireguard-${cfg.interface}" = {
-      after = [ "sops-nix.service" ];
-      requires = [ "sops-nix.service" ];
-    };
+    # sops-nix on our pin places secrets via an activation script, not a
+    # systemd unit, so a Requires=sops-nix.service was unsatisfiable and
+    # blocked wireguard-wg0 from starting at all. The activation snippet
+    # runs as part of system activation (before multi-user.target), so by
+    # the time wireguard-wg0.service is even eligible to start, the key
+    # at /run/secrets/wg-private-key is already in place. No explicit
+    # ordering needed.
   };
 }
