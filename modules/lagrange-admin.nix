@@ -132,24 +132,25 @@ in
         ++ lib.optional cfg.requireSops "sops-nix.service";
       wantedBy = [ "multi-user.target" ];
 
-      path = with pkgs; [
+      path = [
+        # sudo MUST come from /run/wrappers/bin — pkgs.sudo's /nix/store
+        # binary lacks the setuid bit (the store is mounted nosuid for
+        # security), so calling it gives "sudo must be owned by uid 0
+        # and have the setuid bit set". NixOS exposes the wrapped setuid
+        # binary at /run/wrappers/bin/sudo. The actual privilege gate is
+        # the sudoers allowlist further down.
+        "/run/wrappers/bin"
+      ] ++ (with pkgs; [
         git
         openssh
         nix
         systemd
         coreutils
         util-linux
-        # sudo is required by vm.rs::run_sudo for systemctl/microvm/nixos-rebuild
-        # calls — without it the unit gets ENOENT before the privileged
-        # command can run. The actual privilege gate is the sudoers
-        # allowlist further down.
-        sudo
         # The microvm CLI lives in the flake input, not nixpkgs. Without
-        # it on PATH, `microvm -c <name>` fails (the sudoers allowlist
-        # uses /run/current-system/sw/bin/microvm but sudo still needs
-        # to resolve `microvm` to that path through PATH).
+        # it on PATH, sudo can't resolve `microvm` to invoke it.
         self.inputs.microvm.packages.${pkgs.system}.microvm
-      ];
+      ]);
 
       environment = {
         LAGRANGE_BIND = "${cfg.bindAddress}:${toString cfg.bindPort}";
