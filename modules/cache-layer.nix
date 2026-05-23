@@ -44,7 +44,11 @@ in
       listen = "${bridgeIp}:8080";
       api-endpoint = "http://cache.internal:8080/";
 
-      database.url = "sqlite:///var/lib/cache/atticd/server.db?mode=rwc";
+      # Sqlite file lives inside storage/ because that's the only writable
+      # path under the hardened atticd unit (ProtectSystem=strict +
+      # ReadWritePaths=/var/lib/cache/atticd/storage). Trying to open the
+      # DB anywhere else in /var/lib/cache/atticd fails with EROFS.
+      database.url = "sqlite:///var/lib/cache/atticd/storage/server.db?mode=rwc";
 
       storage = {
         type = "local";
