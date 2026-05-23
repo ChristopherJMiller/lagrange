@@ -1,8 +1,11 @@
 keys:
-  # Operator's personal age key. Replace with real public key before encrypting.
-  - &operator age1__PLACEHOLDER_OPERATOR_PUBKEY__
-  # Lagrange host's age key. Same — replace once the host is bootstrapped.
-  - &lagrange age1__PLACEHOLDER_LAGRANGE_HOST_PUBKEY__
+  # Operator's personal age key (chris). Public part of
+  # ~/.config/sops/age/keys.txt on the operator workstation.
+  - &operator age1pqld85e4ge2uy99g68g2ez27uy64y9kzw830dtgzfgw68gupapvq4avz6f
+  # Lagrange host's age key. Private part lives at
+  # ~/.config/sops/age/lagrange-host.txt on the operator workstation and
+  # gets copied to /var/lib/sops-nix/key.txt on the box during install.
+  - &lagrange age1468lcrw76fq5kecl52a6rk6s0v0yvryhpg475ym62w06f4excdxs7tpwwr
 
 creation_rules:
   - path_regex: secrets/.+\.yaml$

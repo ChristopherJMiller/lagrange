@@ -21,8 +21,7 @@ in
     isNormalUser = true;
     extraGroups = [ "wheel" "kvm" "libvirtd" "microvm" ];
     openssh.authorizedKeys.keys = [
-      # Replace with operator's real key after bootstrap.
-      "ssh-ed25519 AAAA__PLACEHOLDER__ chris@workstation"
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHR4q3amhKDhCF6+xa3oTXJX2ycN503+cEo/gpnOkFt git@chrismiller.xyz"
     ];
   };
 
@@ -38,7 +37,7 @@ in
   };
 
   # Time, locale, console.
-  time.timeZone = lib.mkDefault "Etc/UTC";
+  time.timeZone = lib.mkDefault "America/Los_Angeles";
   i18n.defaultLocale = "en_US.UTF-8";
   console.keyMap = "us";
 

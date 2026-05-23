@@ -1,13 +1,117 @@
-{ config, lib, pkgs, modulesPath, ... }:
+{ config, lib, pkgs, modulesPath, inputs, ... }:
 
+let
+  # The flake ref disko-install + nixos-install consume. Override by passing
+  # `--flake <ref>#lagrange` to `lagrange-install` if you're testing a fork.
+  defaultFlake = "github:christopherjmiller/lagrange#lagrange";
+
+  lagrange-install = pkgs.writeShellApplication {
+    name = "lagrange-install";
+    runtimeInputs = with pkgs; [
+      coreutils
+      util-linux
+      inputs.disko.packages.${pkgs.system}.disko-install
+    ];
+    text = ''
+      set -euo pipefail
+
+      FLAKE="${defaultFlake}"
+      DISK=""
+
+      usage() {
+        cat <<EOF
+      Usage: lagrange-install [--disk /dev/<X>] [--flake <ref>#lagrange]
+
+      Partitions the target disk with disko, installs the lagrange NixOS
+      configuration, then pauses so you can drop the sops age key before
+      rebooting.
+      EOF
+      }
+
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --disk)  DISK="$2"; shift 2 ;;
+          --flake) FLAKE="$2"; shift 2 ;;
+          -h|--help) usage; exit 0 ;;
+          *) echo "Unknown arg: $1" >&2; usage; exit 2 ;;
+        esac
+      done
+
+      echo "=== Lagrange installer ==="
+      echo
+      echo "Available disks:"
+      # `MODEL` can contain spaces, so $4 is unreliable — match on the last
+      # column (TYPE) with $NF instead. Use `-p` to print full /dev/<X> paths.
+      lsblk -dp -o NAME,SIZE,MODEL,TYPE | awk 'NR==1 || $NF=="disk"'
+      echo
+
+      if [[ -z "$DISK" ]]; then
+        read -rp "Target disk (e.g. /dev/nvme0n1): " DISK
+      fi
+
+      if [[ ! -b "$DISK" ]]; then
+        echo "Not a block device: $DISK" >&2
+        exit 1
+      fi
+
+      echo
+      echo "About to ERASE $DISK and install $FLAKE on it."
+      read -rp "Type the disk path again to confirm: " CONFIRM
+      if [[ "$CONFIRM" != "$DISK" ]]; then
+        echo "Mismatch, aborting." >&2
+        exit 1
+      fi
+
+      echo
+      echo "Partitioning and installing — this will take several minutes..."
+      disko-install --flake "$FLAKE" --disk main "$DISK"
+
+      echo
+      cat <<'EOF'
+
+      === Installation complete ===
+
+      Next step: drop your sops age private key onto the new rootfs so
+      first boot can decrypt secrets/satellite.yaml.
+
+      Easiest path from your workstation:
+
+        scp ~/.config/sops/age/lagrange-host.txt root@<this-host>:/tmp/key.txt
+
+      Then back on this installer:
+
+        install -D -m 600 /tmp/key.txt /mnt/var/lib/sops-nix/key.txt
+
+      Press Enter once the key is in place to reboot. Ctrl-C to bail.
+      EOF
+
+      read -r _
+
+      if [[ ! -s /mnt/var/lib/sops-nix/key.txt ]]; then
+        echo
+        echo "Warning: /mnt/var/lib/sops-nix/key.txt is missing or empty."
+        echo "Without it, sops-nix activation will fail on first boot."
+        read -rp "Continue reboot anyway? [y/N] " ANS
+        case "$ANS" in
+          y|Y) ;;
+          *) echo "Aborting reboot. Key was not staged."; exit 1 ;;
+        esac
+      fi
+
+      echo "Rebooting in 5s..."
+      sleep 5
+      reboot
+    '';
+  };
+in
 {
   # Minimal installer ISO. Carries:
   #   - the operator's SSH public key (so they can finish provisioning remotely)
-  #   - comin's repo URL pre-baked
+  #   - the lagrange-install wrapper (disko + nixos-install + key-drop pause)
   #   - wireguard-tools (the actual private key lands via sops after first boot)
   #
-  # After `nixos-install --flake .#lagrange` reboots into the real system,
-  # comin owns the box — no more SSH-driven imperative steps.
+  # After `lagrange-install` reboots into the real system, comin owns the
+  # box — no more SSH-driven imperative steps.
 
   imports = [
     "${modulesPath}/installer/cd-dvd/installation-cd-minimal.nix"
@@ -22,8 +126,7 @@
   networking.hostName = "lagrange-installer";
 
   users.users.root.openssh.authorizedKeys.keys = [
-    # Replace with operator's real key before building the ISO.
-    "ssh-ed25519 AAAA__INSTALLER_BOOTSTRAP_KEY__ chris@workstation"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHR4q3amhKDhCF6+xa3oTXJX2ycN503+cEo/gpnOkFt git@chrismiller.xyz"
   ];
 
   services.openssh = {
@@ -40,13 +143,14 @@
     nixos-install-tools
     parted
     gptfdisk
+    lagrange-install
   ];
 
   # Convenience banner so the operator knows what they're looking at.
   services.getty.helpLine = lib.mkForce ''
-    Lagrange installer ISO. Provision with:
-        nixos-install --flake github:christopherjmiller/lagrange#lagrange
-    After install, drop your sops age key at /mnt/var/lib/sops-nix/key.txt
-    and reboot. comin will take over from there.
+    Lagrange installer ISO. To provision this box, run:
+        sudo lagrange-install
+    It will partition the target disk, install NixOS, and pause for you to
+    drop your sops age key before rebooting. comin takes over from there.
   '';
 }

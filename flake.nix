@@ -15,6 +15,9 @@
     sops-nix.url = "github:Mic92/sops-nix";
     sops-nix.inputs.nixpkgs.follows = "nixpkgs";
 
+    disko.url = "github:nix-community/disko";
+    disko.inputs.nixpkgs.follows = "nixpkgs";
+
     attic.url = "github:zhaofengli/attic";
     attic.inputs.nixpkgs.follows = "nixpkgs";
 
@@ -29,6 +32,7 @@
     , microvm
     , comin
     , sops-nix
+    , disko
     , attic
     , claude-code
     , ...
@@ -60,6 +64,8 @@
         lagrange = nixpkgs.lib.nixosSystem {
           inherit system specialArgs;
           modules = commonModules ++ [
+            disko.nixosModules.disko
+            ./hosts/lagrange/disko.nix
             ./hosts/lagrange/default.nix
           ];
         };
