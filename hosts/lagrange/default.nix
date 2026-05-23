@@ -23,6 +23,11 @@ in
     openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHR4q3amhKDhCF6+xa3oTXJX2ycN503+cEo/gpnOkFt git@chrismiller.xyz"
     ];
+    # First-boot console password so we're not locked out if SSH is wedged
+    # or the workstation key is unavailable. Change with `passwd` after
+    # login — NixOS doesn't re-apply initialPassword once /etc/shadow has a
+    # real hash.
+    initialPassword = "lagrange";
   };
 
   security.sudo.wheelNeedsPassword = false;

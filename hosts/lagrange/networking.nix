@@ -11,9 +11,11 @@ let
 in
 {
   networking = {
-    # We manage the firewall ourselves via nftables (deny-by-default).
+    # Firewall is off for bring-up. The nftables ruleset below stays in the
+    # config so we can re-enable it once the operator workstation IP is
+    # known, but right now `nftables.enable = false` means it has no effect.
     firewall.enable = false;
-    nftables.enable = true;
+    nftables.enable = false;
 
     useNetworkd = true;
     useDHCP = false;
@@ -29,7 +31,14 @@ in
       prefixLength = cacheBridgeCidr;
     }];
 
-    interfaces.${primaryWanIface}.useDHCP = true;
+    # Static LAN address. Matches the home router's DHCP exclusion range.
+    interfaces.${primaryWanIface}.ipv4.addresses = [{
+      address = "192.168.0.244";
+      prefixLength = 24;
+    }];
+
+    defaultGateway = "192.168.0.1";
+    nameservers = [ "1.1.1.1" "8.8.8.8" ];
 
     nat = {
       enable = true;
