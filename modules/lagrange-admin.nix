@@ -83,10 +83,15 @@ in
 
     requireSops = lib.mkOption {
       type = lib.types.bool;
-      default = true;
+      default = false;
       description = ''
-        Whether to gate the unit on sops-nix.service. Tests turn this off
-        and supply a plaintext token via tokenFile.
+        Whether to gate the unit on sops-nix.service. Our pinned sops-nix
+        installs secrets via an activation script (not a systemd unit),
+        so a Requires=sops-nix.service is unsatisfiable and prevents the
+        admin service from starting at all. Activation runs before any
+        unit, so the token is present at /run/secrets/admin-service-token
+        by the time systemd brings lagrange-admin up. Tests already turn
+        this off and supply a plaintext token via tokenFile.
       '';
     };
   };
