@@ -1,6 +1,8 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 mod api;
@@ -11,6 +13,7 @@ mod error;
 mod state;
 mod vm;
 
+use auth::AuthCfg;
 use config::Settings;
 
 #[derive(Parser, Debug)]
@@ -66,16 +69,32 @@ async fn run_server(settings: Settings) -> anyhow::Result<()> {
         .trim()
         .to_string();
 
-    let app = api::router(app_state, token);
+    let auth = Arc::new(AuthCfg {
+        expected_token: Arc::from(token),
+        trusted_sso_peer: settings.trusted_sso_peer,
+    });
 
-    let addr: std::net::SocketAddr = settings
+    let app = api::router(app_state, auth);
+
+    let addr: SocketAddr = settings
         .bind
         .parse()
         .with_context(|| format!("parse bind address {}", settings.bind))?;
 
-    tracing::info!(%addr, "lagrange-admin starting");
+    tracing::info!(
+        %addr,
+        sso_peer = ?settings.trusted_sso_peer,
+        "lagrange-admin starting"
+    );
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    // into_make_service_with_connect_info publishes ConnectInfo<SocketAddr>
+    // into request extensions; the auth middleware reads the source IP from
+    // there to gate the SSO path.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 

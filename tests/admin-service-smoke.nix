@@ -31,6 +31,10 @@ pkgs.testers.runNixOSTest {
       requireSops = false;
       tokenFile = pkgs.writeText "admin-test-token" testToken;
       deployKeysTarFile = null;
+      # Test runs against 127.0.0.1, so the production SSO-peer trust IP
+      # would never match anyway — but turn the path off explicitly so the
+      # smoke test exercises only the bearer-token policy.
+      trustedSsoPeer = null;
       logLevel = "debug";
     };
 

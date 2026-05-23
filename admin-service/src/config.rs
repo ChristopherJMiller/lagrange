@@ -1,3 +1,5 @@
+use anyhow::Context;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 /// Runtime configuration. Populated from environment variables set by the
@@ -14,6 +16,10 @@ pub struct Settings {
     pub deploy_keys_tar: Option<PathBuf>,
     pub ip_pool_cidr: String,
     pub vm_subnet_gateway: String,
+    /// Source IP allowed to bypass bearer-auth by presenting
+    /// `X-authentik-username`. `None` disables SSO auth entirely (default
+    /// for tests; production sets it to the cluster wg peer, 10.99.0.1).
+    pub trusted_sso_peer: Option<IpAddr>,
 }
 
 impl Settings {
@@ -30,6 +36,13 @@ impl Settings {
             std::env::var("LAGRANGE_IP_POOL").unwrap_or_else(|_| "10.42.0.0/24".to_string());
         let vm_subnet_gateway =
             std::env::var("LAGRANGE_VM_GATEWAY").unwrap_or_else(|_| "10.42.0.1".to_string());
+        let trusted_sso_peer = std::env::var("LAGRANGE_TRUSTED_SSO_PEER")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse::<IpAddr>())
+            .transpose()
+            .context("parse LAGRANGE_TRUSTED_SSO_PEER")?;
 
         Ok(Self {
             bind,
@@ -41,6 +54,7 @@ impl Settings {
             deploy_keys_tar,
             ip_pool_cidr,
             vm_subnet_gateway,
+            trusted_sso_peer,
         })
     }
 

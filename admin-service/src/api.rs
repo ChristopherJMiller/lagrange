@@ -1,4 +1,4 @@
-use crate::auth::require_bearer;
+use crate::auth::{require_auth, AuthCfg};
 use crate::db::{self, VmStatus};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -17,9 +17,7 @@ use std::sync::Arc;
 
 static NAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-z0-9-]{1,30}$").unwrap());
 
-pub fn router(state: AppState, token: String) -> Router {
-    let token: Arc<str> = Arc::from(token);
-
+pub fn router(state: AppState, auth: Arc<AuthCfg>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
         .route("/v1/repos", get(list_repos).post(create_repo))
@@ -29,8 +27,8 @@ pub fn router(state: AppState, token: String) -> Router {
         .route("/v1/repos/:name/restart", post(restart_repo))
         .route("/v1/repos/:name/logs", get(repo_logs))
         .layer(middleware::from_fn(move |req, next| {
-            let token = token.clone();
-            async move { require_bearer(token, req, next).await }
+            let auth = auth.clone();
+            async move { require_auth(auth, req, next).await }
         }))
         .with_state(state)
 }

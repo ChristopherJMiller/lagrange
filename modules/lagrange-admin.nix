@@ -94,6 +94,21 @@ in
         this off and supply a plaintext token via tokenFile.
       '';
     };
+
+    trustedSsoPeer = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "10.99.0.1";
+      description = ''
+        Source IP allowed to bypass the bearer-token check by presenting
+        an `X-authentik-username` header. In production this is the
+        cluster-side wg-gateway (10.99.0.1) — ingress-nginx applies the
+        authentik forward-auth, strips client-supplied versions of the
+        header, and forwards the trusted ones through the tunnel. The
+        IP gate prevents any other pod from spoofing the header by
+        talking directly to wg0. Set to null to disable SSO auth (tests
+        do this so they can run against 127.0.0.1).
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -136,6 +151,8 @@ in
         RUST_LOG = cfg.logLevel;
       } // lib.optionalAttrs (cfg.deployKeysTarFile != null) {
         LAGRANGE_DEPLOY_KEYS_TAR = toString cfg.deployKeysTarFile;
+      } // lib.optionalAttrs (cfg.trustedSsoPeer != null) {
+        LAGRANGE_TRUSTED_SSO_PEER = cfg.trustedSsoPeer;
       };
 
       serviceConfig = {
