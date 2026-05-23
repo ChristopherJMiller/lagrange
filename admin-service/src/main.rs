@@ -10,6 +10,7 @@ mod auth;
 mod config;
 mod db;
 mod error;
+mod oauth_token;
 mod state;
 mod vm;
 

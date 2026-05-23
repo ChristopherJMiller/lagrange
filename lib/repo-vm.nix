@@ -206,6 +206,12 @@ nixpkgs.lib.nixosSystem {
             "HOME=/home/agent"
             "TERM=screen-256color"
           ];
+          # The admin service writes CLAUDE_CODE_OAUTH_TOKEN here on the host
+          # at `<agent_state_dir>/agent.env`; virtiofs surfaces it as
+          # /persistent/agent.env inside the guest. Leading `-` makes the
+          # file optional so VMs created before the token is configured
+          # still boot (Claude Code just prompts for login in that case).
+          EnvironmentFile = "-/persistent/agent.env";
           ExecStart = pkgs.writeShellScript "claude-remote-start" ''
             set -euo pipefail
             cd /home/agent/work
