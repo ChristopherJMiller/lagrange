@@ -41,6 +41,12 @@ in
     };
   };
 
+  # Console auto-login as `chris` on tty1. The box lives in a physically
+  # controlled spot and the value at the console is recovery access during
+  # bring-up — losing it would mean a USB reboot to fix every misconfig.
+  # SSH still requires the operator's authorized key.
+  services.getty.autologinUser = "chris";
+
   # Time, locale, console.
   time.timeZone = lib.mkDefault "America/Los_Angeles";
   i18n.defaultLocale = "en_US.UTF-8";
