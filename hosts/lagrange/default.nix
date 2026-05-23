@@ -75,6 +75,31 @@ in
   nixpkgs.overlays = [
     inputs.claude-code.overlays.default
     inputs.attic.overlays.default
+    # devpi-server's pytest suite contains mirror/streaming tests that fail
+    # under the nixos-install sandbox (404s where 200 is expected). When the
+    # installer can't pull the python wheel from a binary cache, those
+    # failures gate the entire install. The wrapper `pkgs.devpi-server`
+    # already has doCheck=false, but the underlying `python3Packages.devpi-*`
+    # builds still run pytest — override them at the python package set so
+    # the wrapper picks up tests-free versions. Upstream's tests don't tell
+    # us anything we'd act on here.
+    (final: prev: {
+      python3 = prev.python3.override (old: {
+        packageOverrides = lib.composeExtensions
+          (old.packageOverrides or (_: _: { }))
+          (pyfinal: pyprev: {
+            devpi-server = pyprev.devpi-server.overridePythonAttrs (_: {
+              doCheck = false;
+              doInstallCheck = false;
+            });
+            devpi-common = pyprev.devpi-common.overridePythonAttrs (_: {
+              doCheck = false;
+              doInstallCheck = false;
+            });
+          });
+      });
+      python3Packages = final.python3.pkgs;
+    })
   ];
   nixpkgs.config.allowUnfreePredicate = pkg:
     builtins.elem (lib.getName pkg) [ "claude-code" ];
