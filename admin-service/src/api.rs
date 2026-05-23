@@ -16,7 +16,10 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-static NAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-z0-9-]{1,30}$").unwrap());
+// Names are used as the bridge interface ID `vm-<name>` inside the guest,
+// which is capped at 15 chars by Linux's IFNAMSIZ — 12 chars of name + the
+// 3-char `vm-` prefix.
+static NAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-z0-9-]{1,12}$").unwrap());
 
 pub fn router(state: AppState, auth: Arc<AuthCfg>) -> Router {
     Router::new()
@@ -104,7 +107,7 @@ async fn create_repo(
 ) -> ApiResult<(StatusCode, Json<CreateResponse>)> {
     if !NAME_RE.is_match(&body.name) {
         return Err(ApiError::BadRequest(
-            "name must match [a-z0-9-]{1,30}".into(),
+            "name must match [a-z0-9-]{1,12} (longer names overflow IFNAMSIZ for the vm-<name> bridge id)".into(),
         ));
     }
     if !(1..=32).contains(&body.vcpu) {
