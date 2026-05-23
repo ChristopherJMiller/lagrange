@@ -25,6 +25,17 @@ in
 
   config = {
   ###### attic — Nix binary cache (pull-through)
+  # The atticd nixos module uses systemd DynamicUser, so it normally would
+  # not create an entry in /etc/passwd. sops-nix runs `user.Lookup("atticd")`
+  # during activation before any service starts, and fails the whole secret
+  # setup if the user is missing. Declare the user/group statically so the
+  # lookup succeeds; systemd's DynamicUser will reuse the static UID.
+  users.users.atticd = {
+    isSystemUser = true;
+    group = "atticd";
+  };
+  users.groups.atticd = { };
+
   services.atticd = {
     enable = true;
     environmentFile = config.sops.secrets.atticd-env.path;

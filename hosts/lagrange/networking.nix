@@ -57,6 +57,14 @@ in
     '';
   };
 
+  # dnsmasq reads drop-in confs from /etc/dnsmasq.d (admin service writes
+  # per-VM static leases there). NixOS doesn't create the directory itself,
+  # so dnsmasq refuses to start with "cannot access directory". Materialize
+  # the dir as an empty tmpfile.
+  systemd.tmpfiles.rules = [
+    "d /etc/dnsmasq.d 0755 root root -"
+  ];
+
   # dnsmasq resolves cache.internal for guests and offers DHCP on the bridge.
   # We deliberately leave the upstream resolver to the guest's systemd-resolved
   # so public DNS doesn't funnel through here.
