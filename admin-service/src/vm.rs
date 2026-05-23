@@ -152,7 +152,12 @@ pub async fn provision_persistent_volume(settings: &Settings, name: &str) -> Api
 
 pub async fn microvm_create_and_start(settings: &Settings, name: &str) -> ApiResult<()> {
     let flake_path = settings.vm_flake_dir(name);
-    let flake_ref = format!("{}#{}", flake_path.display(), name);
+    // -c gives the VM name; -f takes the flake URI WITHOUT an attribute
+    // fragment. The CLI builds the full attr path
+    // (`#nixosConfigurations.<name>.config.microvm.declaredRunner`) itself —
+    // passing `<path>#<name>` here gave Nix a malformed attr with a stray
+    // `#` in the middle.
+    let flake_ref = flake_path.display().to_string();
 
     run_cmd("microvm", &["-c", name, "-f", &flake_ref]).await?;
     run_cmd("systemctl", &["start", &format!("microvm@{}", name)]).await?;
