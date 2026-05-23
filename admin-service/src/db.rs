@@ -89,12 +89,9 @@ pub async fn allocate_and_insert(
     let mac = vm_mac_from_ip(&ip);
     let now = Utc::now();
 
-    sqlx::query("UPDATE ip_pool SET vm_name = ?1 WHERE ip = ?2")
-        .bind(name)
-        .bind(&ip)
-        .execute(&mut *tx)
-        .await?;
-
+    // Insert into repo_vms BEFORE setting ip_pool.vm_name.
+    // ip_pool.vm_name has a FK to repo_vms(name); referencing a name that
+    // doesn't exist yet trips SQLITE_CONSTRAINT_FOREIGNKEY (code 787).
     sqlx::query(
         r#"
         INSERT INTO repo_vms
@@ -121,6 +118,12 @@ pub async fn allocate_and_insert(
         }
         ApiError::Database(e)
     })?;
+
+    sqlx::query("UPDATE ip_pool SET vm_name = ?1 WHERE ip = ?2")
+        .bind(name)
+        .bind(&ip)
+        .execute(&mut *tx)
+        .await?;
 
     tx.commit().await?;
     get_vm(pool, name).await?.ok_or(ApiError::NotFound(name.into()))
