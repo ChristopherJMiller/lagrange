@@ -140,6 +140,6 @@ in
     # modules/lagrange-admin.nix) can write per-VM directories without
     # sudo. `z` (not `d`) so the perms are reapplied to an existing dir
     # left over from earlier installs that used different ownership.
-    "z /var/lib/microvms     0775 microvm kvm -"
+    "z /var/lib/microvms     0775 root    kvm -"
   ];
 }

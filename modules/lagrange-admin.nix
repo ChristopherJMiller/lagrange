@@ -237,13 +237,18 @@ in
       "d ${cfg.stateDir}/deploy-keys      0700 lagrange-admin lagrange-admin -"
       "d ${cfg.stateDir}/vm-flakes        0750 lagrange-admin lagrange-admin -"
       "d ${cfg.agentStateRoot}            0750 lagrange-admin lagrange-admin -"
-      # microvm:kvm matches what microvm.nix's host module owns this dir
-      # as. Using a `microvm` group here silently fails — no such group.
-      "z ${cfg.microvmStateDir}           0775 microvm        kvm            -"
+      # root:kvm 0775 — kvm group is standard in NixOS (smoke test has it)
+      # and both microvm.service (microvm user, in kvm) and lagrange-admin
+      # (also in kvm) can write. `d` creates if absent (smoke test where
+      # microvm.nix isn't loaded); `z` enforces perms on the existing dir
+      # in production where microvm.nix already created it differently.
+      "d ${cfg.microvmStateDir}           0775 root           kvm            -"
+      "z ${cfg.microvmStateDir}           0775 root           kvm            -"
       # microvm -c writes per-VM gcroots here; lagrange-admin (in kvm) must
       # be able to mkdir under it. microvm.nix's host module doesn't create
-      # this with group-writable perms by default.
-      "d /nix/var/nix/gcroots/microvm     0775 microvm        kvm            -"
+      # this with group-writable perms by default. root:kvm so it works
+      # in both production and the smoke test (microvm user may not exist).
+      "d /nix/var/nix/gcroots/microvm     0775 root           kvm            -"
     ];
   };
 }
