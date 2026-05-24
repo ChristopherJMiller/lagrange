@@ -1,4 +1,5 @@
 use crate::auth::{require_auth, AuthCfg};
+use crate::credentials;
 use crate::db::{self, VmStatus};
 use crate::error::{ApiError, ApiResult};
 use crate::oauth_token;
@@ -35,6 +36,12 @@ pub fn router(state: AppState, auth: Arc<AuthCfg>) -> Router {
             get(get_claude_oauth_token)
                 .post(set_claude_oauth_token)
                 .delete(delete_claude_oauth_token),
+        )
+        .route(
+            "/v1/auth/claude-credentials",
+            get(get_claude_credentials)
+                .post(set_claude_credentials)
+                .delete(delete_claude_credentials),
         )
         .layer(middleware::from_fn(move |req, next| {
             let auth = auth.clone();
@@ -348,6 +355,48 @@ async fn restage_all_vms(s: &AppState) -> ApiResult<()> {
     let vms = db::list_vms(&s.db).await?;
     for v in vms {
         oauth_token::stage_for_vm(&s.settings, &v.name).await?;
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct SetCredentialsRequest {
+    /// Verbatim contents of `~/.claude/.credentials.json` on the operator's
+    /// workstation after `claude auth login`. The full-scope OAuth session.
+    credentials_json: String,
+    /// Verbatim contents of `~/.claude.json`. Claude Code requires both
+    /// files or it treats the session as a fresh install and re-prompts
+    /// for login, even with valid credentials.
+    claude_json: String,
+}
+
+async fn get_claude_credentials(
+    State(s): State<AppState>,
+) -> ApiResult<Json<credentials::Status>> {
+    Ok(Json(credentials::status(s.settings.clone()).await?))
+}
+
+async fn set_claude_credentials(
+    State(s): State<AppState>,
+    Json(body): Json<SetCredentialsRequest>,
+) -> ApiResult<StatusCode> {
+    credentials::set(&s.settings, &body.credentials_json, &body.claude_json).await?;
+    restage_all_vm_credentials(&s).await?;
+    tracing::info!("claude-credentials set; restaged all VM credentials files");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_claude_credentials(State(s): State<AppState>) -> ApiResult<StatusCode> {
+    credentials::clear(&s.settings).await?;
+    restage_all_vm_credentials(&s).await?;
+    tracing::info!("claude-credentials cleared; removed per-VM credentials files");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn restage_all_vm_credentials(s: &AppState) -> ApiResult<()> {
+    let vms = db::list_vms(&s.db).await?;
+    for v in vms {
+        credentials::stage_for_vm(&s.settings, &v.name).await?;
     }
     Ok(())
 }

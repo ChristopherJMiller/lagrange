@@ -1,0 +1,252 @@
+//! Full-scope Claude Code credentials (the pair the `claude` CLI persists
+//! after `claude auth login`). Unlike the inference-only token from
+//! `claude setup-token`, these credentials carry the scope needed for
+//! Remote Control sessions — i.e. they're what the user sees in
+//! claude.ai/code when a repo-VM comes online.
+//!
+//! The CLI stores two files on the workstation:
+//!   ~/.claude/.credentials.json   (the OAuth session itself)
+//!   ~/.claude.json                (install state; Claude Code needs both
+//!                                  or it treats the session as fresh)
+//!
+//! The operator runs `claude auth login` once on their workstation, then
+//! POSTs both file contents here. We persist them under lagrange-admin's
+//! state dir and stage per-VM copies into each repo's `/persistent/`
+//! virtiofs share so the guest's bind mounts surface them in the agent's
+//! home.
+//!
+//! Same group-readable (0640 lagrange-admin:users) trick as oauth_token.rs:
+//! virtiofs preserves GIDs, the guest agent's primary group is `users`,
+//! so the agent can read but the file isn't world-readable on the host.
+use crate::config::Settings;
+use crate::error::{ApiError, ApiResult};
+use chrono::{DateTime, Utc};
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+// Host-side filenames under lagrange-admin's state dir.
+pub const HOST_CREDS_FILE: &str = "claude-credentials.json";
+pub const HOST_INSTALL_FILE: &str = "claude-install.json";
+
+// Per-VM filenames under <agent_state_dir>/. The leading dot of
+// `.credentials.json` is added by the bind mount target in the guest;
+// keep host-side names dotless so they show up in `ls` without -a.
+pub const VM_CREDS_FILE: &str = "credentials.json";
+pub const VM_INSTALL_FILE: &str = "claude.json";
+
+const USERS_GID: u32 = 100;
+const MAX_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Status {
+    pub present: bool,
+    pub set_at: Option<DateTime<Utc>>,
+}
+
+pub fn host_creds_path(s: &Settings) -> PathBuf {
+    s.state_dir.join(HOST_CREDS_FILE)
+}
+pub fn host_install_path(s: &Settings) -> PathBuf {
+    s.state_dir.join(HOST_INSTALL_FILE)
+}
+pub fn vm_creds_path(s: &Settings, name: &str) -> PathBuf {
+    s.agent_state_dir(name).join(VM_CREDS_FILE)
+}
+pub fn vm_install_path(s: &Settings, name: &str) -> PathBuf {
+    s.agent_state_dir(name).join(VM_INSTALL_FILE)
+}
+
+pub async fn status(s: Arc<Settings>) -> ApiResult<Status> {
+    // We treat "present" as both files being on disk. credentials.json
+    // alone is the documented footgun.
+    let creds_md = tokio::fs::metadata(&host_creds_path(&s)).await;
+    let install_md = tokio::fs::metadata(&host_install_path(&s)).await;
+    match (creds_md, install_md) {
+        (Ok(c), Ok(_)) => Ok(Status {
+            present: true,
+            set_at: c.modified().ok().map(DateTime::<Utc>::from),
+        }),
+        _ => Ok(Status {
+            present: false,
+            set_at: None,
+        }),
+    }
+}
+
+pub async fn set(s: &Settings, credentials_json: &str, claude_json: &str) -> ApiResult<()> {
+    validate_json(credentials_json, "credentials_json")?;
+    validate_json(claude_json, "claude_json")?;
+    write_atomic_0640_users(&host_creds_path(s), credentials_json).await?;
+    write_atomic_0640_users(&host_install_path(s), claude_json).await?;
+    Ok(())
+}
+
+pub async fn clear(s: &Settings) -> ApiResult<()> {
+    for path in [host_creds_path(s), host_install_path(s)] {
+        match tokio::fs::remove_file(&path).await {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(ApiError::Io(e)),
+        }
+    }
+    Ok(())
+}
+
+/// Stage (or restage) a single VM's credentials files from the current
+/// host state. Removes the per-VM files if the host has nothing to stage,
+/// so a clear-then-restart sequence doesn't leave stale creds in a VM.
+pub async fn stage_for_vm(s: &Settings, name: &str) -> ApiResult<()> {
+    let agent_dir = s.agent_state_dir(name);
+    tokio::fs::create_dir_all(&agent_dir).await?;
+
+    let pairs = [
+        (host_creds_path(s), vm_creds_path(s, name)),
+        (host_install_path(s), vm_install_path(s, name)),
+    ];
+    for (host, vm) in pairs {
+        match tokio::fs::read_to_string(&host).await {
+            Ok(content) => write_atomic_0640_users(&vm, &content).await?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                match tokio::fs::remove_file(&vm).await {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(ApiError::Io(e)),
+                }
+            }
+            Err(e) => return Err(ApiError::Io(e)),
+        }
+    }
+    Ok(())
+}
+
+fn validate_json(body: &str, field: &'static str) -> ApiResult<()> {
+    if body.trim().is_empty() {
+        return Err(ApiError::BadRequest(format!("{field} must not be empty")));
+    }
+    if body.len() > MAX_BYTES {
+        return Err(ApiError::BadRequest(format!(
+            "{field} exceeds {MAX_BYTES} bytes — that's not a credentials file"
+        )));
+    }
+    serde_json::from_str::<serde_json::Value>(body)
+        .map_err(|e| ApiError::BadRequest(format!("{field} is not valid JSON: {e}")))?;
+    Ok(())
+}
+
+async fn write_atomic_0640_users(final_path: &std::path::Path, contents: &str) -> ApiResult<()> {
+    let parent = final_path
+        .parent()
+        .ok_or_else(|| ApiError::Other(anyhow::anyhow!("path has no parent: {final_path:?}")))?;
+    tokio::fs::create_dir_all(parent).await?;
+    let file_name = final_path
+        .file_name()
+        .ok_or_else(|| ApiError::Other(anyhow::anyhow!("path has no file name: {final_path:?}")))?
+        .to_string_lossy()
+        .into_owned();
+    let tmp_path = parent.join(format!(".{file_name}.tmp"));
+    let body = contents.to_string();
+    let tmp_for_blocking = tmp_path.clone();
+    let final_for_blocking = final_path.to_path_buf();
+    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o640)
+            .open(&tmp_for_blocking)?;
+        f.write_all(body.as_bytes())?;
+        f.sync_all()?;
+        std::fs::set_permissions(&tmp_for_blocking, std::fs::Permissions::from_mode(0o640))?;
+        std::os::unix::fs::chown(&tmp_for_blocking, None, Some(USERS_GID))?;
+        std::fs::rename(&tmp_for_blocking, &final_for_blocking)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| ApiError::Other(anyhow::anyhow!("join error: {e}")))??;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn test_settings(state: &std::path::Path, agent: &std::path::Path) -> Settings {
+        Settings {
+            bind: "127.0.0.1:0".into(),
+            state_dir: state.to_path_buf(),
+            agent_state_root: agent.to_path_buf(),
+            microvm_dir: PathBuf::from("/tmp/unused"),
+            flake_ref: "github:unused/unused".into(),
+            token_file: PathBuf::from("/tmp/unused"),
+            deploy_keys_tar: None,
+            ip_pool_cidr: "10.42.0.0/24".into(),
+            vm_subnet_gateway: "10.42.0.1".into(),
+            trusted_sso_peer: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn set_then_status_roundtrip() {
+        let s = TempDir::new().unwrap();
+        let a = TempDir::new().unwrap();
+        let cfg = test_settings(s.path(), a.path());
+        assert!(!status(Arc::new(cfg.clone())).await.unwrap().present);
+        set(&cfg, "{\"a\":1}", "{\"installed\":true}").await.unwrap();
+        let st = status(Arc::new(cfg.clone())).await.unwrap();
+        assert!(st.present);
+        assert!(st.set_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn invalid_json_rejected() {
+        let s = TempDir::new().unwrap();
+        let a = TempDir::new().unwrap();
+        let cfg = test_settings(s.path(), a.path());
+        assert!(matches!(
+            set(&cfg, "not json", "{}").await,
+            Err(ApiError::BadRequest(_))
+        ));
+        assert!(matches!(
+            set(&cfg, "{}", "").await,
+            Err(ApiError::BadRequest(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn stage_copies_both_files_with_0640() {
+        let s = TempDir::new().unwrap();
+        let a = TempDir::new().unwrap();
+        let cfg = test_settings(s.path(), a.path());
+        std::fs::create_dir_all(cfg.agent_state_dir("alpha")).unwrap();
+        set(&cfg, "{\"a\":1}", "{\"b\":2}").await.unwrap();
+        stage_for_vm(&cfg, "alpha").await.unwrap();
+
+        let cpath = vm_creds_path(&cfg, "alpha");
+        let ipath = vm_install_path(&cfg, "alpha");
+        assert_eq!(std::fs::read_to_string(&cpath).unwrap(), "{\"a\":1}");
+        assert_eq!(std::fs::read_to_string(&ipath).unwrap(), "{\"b\":2}");
+        assert_eq!(
+            std::fs::metadata(&cpath).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+
+    #[tokio::test]
+    async fn stage_removes_files_when_host_cleared() {
+        let s = TempDir::new().unwrap();
+        let a = TempDir::new().unwrap();
+        let cfg = test_settings(s.path(), a.path());
+        std::fs::create_dir_all(cfg.agent_state_dir("alpha")).unwrap();
+        set(&cfg, "{\"a\":1}", "{\"b\":2}").await.unwrap();
+        stage_for_vm(&cfg, "alpha").await.unwrap();
+        assert!(vm_creds_path(&cfg, "alpha").exists());
+
+        clear(&cfg).await.unwrap();
+        stage_for_vm(&cfg, "alpha").await.unwrap();
+        assert!(!vm_creds_path(&cfg, "alpha").exists());
+        assert!(!vm_install_path(&cfg, "alpha").exists());
+    }
+}

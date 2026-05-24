@@ -160,12 +160,23 @@ nixpkgs.lib.nixosSystem {
         "L+ /home/agent/.claude/skills    - - - - /shared/skills"
         "L+ /home/agent/.claude/commands  - - - - /shared/commands"
 
+        # Bind-mount targets for the full-scope Claude Code credentials.
+        # systemd-mount needs the target file to exist before it can be
+        # bind-replaced; pre-create as 0600 owned by agent.
+        "f /home/agent/.claude/.credentials.json 0600 agent users -"
+        "f /home/agent/.claude.json              0600 agent users -"
+
         "d /persistent/projects 0755 agent users -"
         "d /persistent/todos    0755 agent users -"
         "d /persistent/statsig  0755 agent users -"
         "d /persistent/ssh      0700 agent users -"
         "d /persistent/work     0755 agent users -"
         "f /persistent/gitconfig 0644 agent users -"
+        # Bind-mount sources for Claude credentials. The host admin
+        # service writes real contents when credentials are POSTed; until
+        # then these stay as empty placeholders.
+        "f /persistent/credentials.json 0640 agent users -"
+        "f /persistent/claude.json      0640 agent users -"
       ];
 
       fileSystems = lib.mapAttrs'
@@ -181,6 +192,8 @@ nixpkgs.lib.nixosSystem {
           "/home/agent/.ssh" = "ssh";
           "/home/agent/work" = "work";
           "/home/agent/.gitconfig" = "gitconfig";
+          "/home/agent/.claude/.credentials.json" = "credentials.json";
+          "/home/agent/.claude.json" = "claude.json";
         };
 
       ###### Package-manager cache routing

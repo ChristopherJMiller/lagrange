@@ -8,6 +8,7 @@ use tracing_subscriber::EnvFilter;
 mod api;
 mod auth;
 mod config;
+mod credentials;
 mod db;
 mod error;
 mod oauth_token;
