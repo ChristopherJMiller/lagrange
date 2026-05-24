@@ -6,6 +6,7 @@ import type {
   CreateVmResp,
   CredStatus,
   GithubAccount,
+  GithubBranchDto,
   GithubRepoDto,
   HealthDto,
   VmDto,
@@ -58,6 +59,11 @@ export const api = {
     request<GithubRepoDto[]>(
       account ? `/v1/github/repos?account=${encodeURIComponent(account)}` : '/v1/github/repos',
     ),
+  listGithubBranches: (owner: string, repo: string, account?: string) => {
+    const params = new URLSearchParams({ owner, repo })
+    if (account) params.set('account', account)
+    return request<GithubBranchDto[]>(`/v1/github/branches?${params.toString()}`)
+  },
   listGithubAccounts: () => request<GithubAccount[]>('/v1/auth/github-accounts'),
   upsertGithubAccount: (alias: string, token: string) =>
     request<void>(`/v1/auth/github-accounts/${encodeURIComponent(alias)}`, {

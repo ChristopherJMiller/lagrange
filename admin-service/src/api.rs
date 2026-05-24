@@ -32,6 +32,7 @@ pub fn router(state: AppState, auth: Arc<AuthCfg>) -> Router {
         .route("/v1/health", get(health))
         .route("/v1/system/capacity", get(system_capacity))
         .route("/v1/github/repos", get(list_github_repos))
+        .route("/v1/github/branches", get(list_github_branches))
         .route(
             "/v1/agent/claude-md",
             get(get_agent_claude_md).put(put_agent_claude_md),
@@ -98,6 +99,30 @@ async fn list_github_repos(
 ) -> ApiResult<Json<Vec<github_repos::Repo>>> {
     Ok(Json(
         github_repos::list_for_account(&s.db, &s.settings, q.account.as_deref()).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+struct ListBranchesQuery {
+    #[serde(default)]
+    account: Option<String>,
+    owner: String,
+    repo: String,
+}
+
+async fn list_github_branches(
+    State(s): State<AppState>,
+    Query(q): Query<ListBranchesQuery>,
+) -> ApiResult<Json<Vec<github_repos::Branch>>> {
+    Ok(Json(
+        github_repos::list_branches_for_account(
+            &s.db,
+            &s.settings,
+            q.account.as_deref(),
+            &q.owner,
+            &q.repo,
+        )
+        .await?,
     ))
 }
 

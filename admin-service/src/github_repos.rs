@@ -33,6 +33,12 @@ pub struct Repo {
     pub pushed_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct Branch {
+    pub name: String,
+    pub protected: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct GhRepo {
     full_name: String,
@@ -45,16 +51,37 @@ struct GhRepo {
     pushed_at: Option<String>,
 }
 
-struct CacheSlot {
+#[derive(Debug, Deserialize)]
+struct GhBranch {
+    name: String,
+    #[serde(default)]
+    protected: bool,
+}
+
+struct ReposCacheSlot {
     fetched_at: Instant,
     repos: Vec<Repo>,
 }
 
-static CACHE: Lazy<Mutex<HashMap<String, CacheSlot>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+struct BranchesCacheSlot {
+    fetched_at: Instant,
+    branches: Vec<Branch>,
+}
+
+static CACHE: Lazy<Mutex<HashMap<String, ReposCacheSlot>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static BRANCH_CACHE: Lazy<Mutex<HashMap<String, BranchesCacheSlot>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 const CACHE_TTL: Duration = Duration::from_secs(60);
+// Branches change more often than the repo list (every push to a topic
+// branch); keep this short.
+const BRANCH_CACHE_TTL: Duration = Duration::from_secs(30);
 
 pub fn invalidate_cache() {
     if let Ok(mut g) = CACHE.lock() {
+        g.clear();
+    }
+    if let Ok(mut g) = BRANCH_CACHE.lock() {
         g.clear();
     }
 }
@@ -172,7 +199,7 @@ pub async fn list_for_account(
     if let Ok(mut g) = CACHE.lock() {
         g.insert(
             alias,
-            CacheSlot {
+            ReposCacheSlot {
                 fetched_at: Instant::now(),
                 repos: repos.clone(),
             },
@@ -180,4 +207,99 @@ pub async fn list_for_account(
     }
 
     Ok(repos)
+}
+
+fn validate_owner_repo(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 100
+        && s.chars()
+            .all(|c| matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' | '.'))
+}
+
+pub async fn list_branches_for_account(
+    pool: &SqlitePool,
+    settings: &Settings,
+    requested_alias: Option<&str>,
+    owner: &str,
+    repo: &str,
+) -> ApiResult<Vec<Branch>> {
+    if !validate_owner_repo(owner) || !validate_owner_repo(repo) {
+        return Err(ApiError::BadRequest(
+            "owner/repo must be alphanumeric + _-.".into(),
+        ));
+    }
+    let alias = resolve_alias(pool, settings, requested_alias).await?;
+    let cache_key = format!("{}:{}/{}", alias, owner, repo);
+
+    if let Ok(g) = BRANCH_CACHE.lock() {
+        if let Some(slot) = g.get(&cache_key) {
+            if slot.fetched_at.elapsed() < BRANCH_CACHE_TTL {
+                return Ok(slot.branches.clone());
+            }
+        }
+    }
+
+    let token = github_accounts::read_token(settings, &alias)
+        .await?
+        .ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "github_account '{}' has no token staged on disk",
+                alias
+            ))
+        })?;
+
+    let client = reqwest::Client::builder()
+        .user_agent("lagrange-admin/0.1")
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| ApiError::Upstream(format!("reqwest build: {e}")))?;
+
+    // 100 branches per page is GH's max; don't paginate. A repo with
+    // more than 100 branches isn't a candidate for fuzzy-pick anyway.
+    let url = format!(
+        "https://api.github.com/repos/{}/{}/branches?per_page=100",
+        owner, repo
+    );
+    let resp = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| ApiError::Upstream(format!("github request: {e}")))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(ApiError::Upstream(format!(
+            "github responded {}: {}",
+            status,
+            body.chars().take(200).collect::<String>()
+        )));
+    }
+
+    let raw: Vec<GhBranch> = resp
+        .json()
+        .await
+        .map_err(|e| ApiError::Upstream(format!("github decode: {e}")))?;
+    let branches: Vec<Branch> = raw
+        .into_iter()
+        .map(|b| Branch {
+            name: b.name,
+            protected: b.protected,
+        })
+        .collect();
+
+    if let Ok(mut g) = BRANCH_CACHE.lock() {
+        g.insert(
+            cache_key,
+            BranchesCacheSlot {
+                fetched_at: Instant::now(),
+                branches: branches.clone(),
+            },
+        );
+    }
+    Ok(branches)
 }

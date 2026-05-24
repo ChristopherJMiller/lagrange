@@ -4,6 +4,7 @@ import { Field } from './ui/Input'
 import { Button } from './ui/Button'
 import { SectionHeader } from './ui/Bracket'
 import { RepoPicker } from './RepoPicker'
+import { BranchPicker } from './BranchPicker'
 import { CapacityBar } from './CapacityBar'
 import { useUi } from '../store/ui'
 import { api } from '../api/client'
@@ -181,11 +182,11 @@ export function DeployDialog() {
             {repoErr}
           </div>
         )}
-        <Field
-          label="Branch"
-          name="branch"
+        <BranchPicker
           value={branch}
-          onChange={(e) => setBranch(e.target.value.trim())}
+          onChange={setBranch}
+          repoUrl={repoUrl}
+          account={githubAccount}
         />
 
         <SectionHeader label="Size" />

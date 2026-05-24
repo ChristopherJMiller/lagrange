@@ -53,6 +53,11 @@ export type GithubRepoDto = {
   pushed_at: string | null
 }
 
+export type GithubBranchDto = {
+  name: string
+  protected: boolean
+}
+
 export type AgentClaudeMdDto = {
   present: boolean
   set_at: string | null

@@ -50,7 +50,7 @@ export const TIERS: Tier[] = [
   {
     id: 'xlarge',
     label: 'xlarge',
-    vcpu: 16,
+    vcpu: 10,
     memGib: 16,
     blurb: 'rust + native deps',
   },
