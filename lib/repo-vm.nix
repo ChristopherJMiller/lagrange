@@ -256,8 +256,14 @@ nixpkgs.lib.nixosSystem {
               GIT_SSH_COMMAND="ssh -i /home/agent/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new" \
                 ${pkgs.git}/bin/git clone --branch ${repoArgs.branch} ${repoArgs.repoUrl} .
             fi
+            # --remote-control NAME is a flag, not a subcommand (the old
+            # `claude remote-control --spawn session` syntax is gone in
+            # current claude-code).
+            # --dangerously-skip-permissions: the VM is the sandbox; we
+            # don't want claude blocking on a workspace-trust prompt that
+            # nobody is there to answer.
             exec ${pkgs.util-linux}/bin/script -qc \
-              "${pkgs.claude-code}/bin/claude remote-control --name ${repoArgs.name} --spawn session" \
+              "${pkgs.claude-code}/bin/claude --remote-control ${repoArgs.name} --dangerously-skip-permissions" \
               /dev/null
           '';
           Restart = "on-failure";
