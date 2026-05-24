@@ -177,6 +177,10 @@ nixpkgs.lib.nixosSystem {
         # then these stay as empty placeholders.
         "f /persistent/credentials.json 0640 agent users -"
         "f /persistent/claude.json      0640 agent users -"
+        # gh.env: GITHUB_TOKEN / GH_TOKEN (optional). The host writes
+        # actual content when POST /v1/auth/github-token has been called;
+        # if no token, the file is missing and the EnvironmentFile=- in
+        # claude-remote.service handles that gracefully.
       ];
 
       fileSystems = lib.mapAttrs'
@@ -242,12 +246,12 @@ nixpkgs.lib.nixosSystem {
             "HOME=/home/agent"
             "TERM=screen-256color"
           ];
-          # The admin service writes CLAUDE_CODE_OAUTH_TOKEN here on the host
-          # at `<agent_state_dir>/agent.env`; virtiofs surfaces it as
-          # /persistent/agent.env inside the guest. Leading `-` makes the
-          # file optional so VMs created before the token is configured
-          # still boot (Claude Code just prompts for login in that case).
-          EnvironmentFile = "-/persistent/agent.env";
+          # Optional env files staged by the admin service. Leading `-`
+          # makes each file optional so VMs whose corresponding host-side
+          # secret hasn't been POSTed yet still boot:
+          #   agent.env  — CLAUDE_CODE_OAUTH_TOKEN (inference-only token)
+          #   gh.env     — GITHUB_TOKEN / GH_TOKEN for `git push`
+          EnvironmentFile = [ "-/persistent/agent.env" "-/persistent/gh.env" ];
           ExecStart = pkgs.writeShellScript "claude-remote-start" ''
             set -euo pipefail
             cd /home/agent/work
@@ -255,6 +259,13 @@ nixpkgs.lib.nixosSystem {
             if [ ! -d .git ]; then
               GIT_SSH_COMMAND="ssh -i /home/agent/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new" \
                 ${pkgs.git}/bin/git clone --branch ${repoArgs.branch} ${repoArgs.repoUrl} .
+            fi
+            # If POST /v1/auth/github-token has been called, GITHUB_TOKEN
+            # is now in env from gh.env. Wire git's credential helper to
+            # the gh CLI so the agent can `git push` to authorized repos.
+            # `gh auth setup-git` writes ~/.gitconfig with a helper line.
+            if [ -n "''${GITHUB_TOKEN:-}" ]; then
+              ${pkgs.gh}/bin/gh auth setup-git
             fi
             # `claude remote-control` (subcommand) — server mode. Per
             # Anthropic's docs at /en/remote-control, this registers a

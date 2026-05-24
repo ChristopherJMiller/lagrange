@@ -75,20 +75,37 @@ test infra, qemu, kernel). Subsequent runs are warm-cache and finish in
 2. **Replace placeholders.** Search for `__PLACEHOLDER__` and
    `REPLACE_WITH_` across the tree. Every line that hits a real grep result
    needs a value before deploy.
-3. **Build the installer ISO:** `nix build .#installer-iso` and write to
-   USB.
-4. **Boot Lagrange off the USB:** run `nixos-install --flake
-   github:christopherjmiller/lagrange#lagrange`. Reboot.
-5. **Place the host's sops age key** at `/var/lib/sops-nix/key.txt`. The
-   key was generated in step 1 of `secrets/README.md`.
-6. **Apply the cluster manifests.** Cluster-side WireGuard gateway,
+3. **Build the installer ISO and write to USB:**
+   `nix build .#installer-iso`; copy `result/iso/lagrange-installer.iso`
+   onto a Ventoy stick (drop-in, no flashing) or `dd` to a raw stick.
+4. **Boot Lagrange off the USB and run `sudo lagrange-install`.** The
+   wrapper drives `disko-install` against the target disk, pauses to
+   let you `scp` the sops host age key into
+   `/mnt/var/lib/sops-nix/key.txt`, then reboots.
+5. **Apply the cluster manifests.** Cluster-side WireGuard gateway,
    admin Service / Ingress, and bearer-token Secret all live in the
    operator's `luma-homeops` repo (not here). See `cluster/README.md`
    for the contract between sides.
-7. **Verify the WG tunnel:** from a cluster node,
+6. **Verify the WG tunnel:** from a cluster node,
    `kubectl exec -n ops deploy/wg-gateway -- ping 10.99.0.2`.
-8. **Smoke test the admin API:** `curl -H "Authorization: Bearer $TOKEN"
+7. **Smoke test the admin API:** `curl -H "Authorization: Bearer $TOKEN"
    http://lagrange-admin.ops.svc:8443/v1/health`.
+
+### Day 0.5 — stage operator credentials
+
+Three secrets need to be POSTed into the admin API before the first
+repo-VM is useful:
+
+| What | Endpoint | Helper script |
+|---|---|---|
+| Claude Code OAuth session (for Remote Control) | `POST /v1/auth/claude-credentials` | `scripts/stage-claude-credentials.sh` |
+| GitHub fine-grained PAT (for `git push`) | `POST /v1/auth/github-token` | `scripts/stage-github-token.sh` |
+| Long-lived Claude inference token (optional) | `POST /v1/auth/claude-oauth-token` | — (one-liner curl) |
+
+The Claude credentials are mandatory if you want sessions to appear in
+claude.ai/code's sidebar; the GitHub PAT is mandatory if agents should
+push commits anywhere. The inference-only token is only useful if you
+have non-Remote-Control workloads.
 
 ### Day 1+ — daily ops
 
@@ -119,5 +136,8 @@ This is the v1 design. Several follow-ups are explicitly deferred:
 - Per-VM egress policies (§7.4)
 - Public-internet exposure (we don't, by design)
 - Multi-satellite federation (one box for now)
-- `--headless` claude remote-control — currently wrapped in tmux as a
-  workaround
+- Per-VM SSH keys (operator's key is hardcoded in `lib/repo-vm.nix` as
+  the default — fine for single-operator, will want generated per-VM
+  pairs once we want machine consumers)
+- Surfacing the per-VM claude.ai session URL via `GET /v1/repos/:name`
+  so the UI can deep-link instead of "find it in the sidebar"

@@ -157,6 +157,8 @@ pub async fn provision_persistent_volume(settings: &Settings, name: &str) -> Api
     // when the operator hasn't run `claude auth login` and POSTed the
     // result yet.
     crate::credentials::stage_for_vm(settings, name).await?;
+    // GitHub fine-grained PAT for git push. No-op when not configured.
+    crate::github_token::stage_for_vm(settings, name).await?;
     Ok(())
 }
 

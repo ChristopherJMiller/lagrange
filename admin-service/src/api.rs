@@ -2,6 +2,7 @@ use crate::auth::{require_auth, AuthCfg};
 use crate::credentials;
 use crate::db::{self, VmStatus};
 use crate::error::{ApiError, ApiResult};
+use crate::github_token;
 use crate::oauth_token;
 use crate::state::AppState;
 use crate::vm;
@@ -42,6 +43,12 @@ pub fn router(state: AppState, auth: Arc<AuthCfg>) -> Router {
             get(get_claude_credentials)
                 .post(set_claude_credentials)
                 .delete(delete_claude_credentials),
+        )
+        .route(
+            "/v1/auth/github-token",
+            get(get_github_token)
+                .post(set_github_token)
+                .delete(delete_github_token),
         )
         .layer(middleware::from_fn(move |req, next| {
             let auth = auth.clone();
@@ -397,6 +404,43 @@ async fn restage_all_vm_credentials(s: &AppState) -> ApiResult<()> {
     let vms = db::list_vms(&s.db).await?;
     for v in vms {
         credentials::stage_for_vm(&s.settings, &v.name).await?;
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct SetGithubTokenRequest {
+    /// GitHub fine-grained PAT scoped to the repos lagrange's agents
+    /// should be able to push to. Stored under the admin service's
+    /// state dir and staged per-VM as GITHUB_TOKEN / GH_TOKEN env vars.
+    token: String,
+}
+
+async fn get_github_token(State(s): State<AppState>) -> ApiResult<Json<github_token::Status>> {
+    Ok(Json(github_token::status(s.settings.clone()).await?))
+}
+
+async fn set_github_token(
+    State(s): State<AppState>,
+    Json(body): Json<SetGithubTokenRequest>,
+) -> ApiResult<StatusCode> {
+    github_token::set(&s.settings, &body.token).await?;
+    restage_all_vm_github_tokens(&s).await?;
+    tracing::info!("github-token set; restaged all VM env files");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_github_token(State(s): State<AppState>) -> ApiResult<StatusCode> {
+    github_token::clear(&s.settings).await?;
+    restage_all_vm_github_tokens(&s).await?;
+    tracing::info!("github-token cleared; removed per-VM env files");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn restage_all_vm_github_tokens(s: &AppState) -> ApiResult<()> {
+    let vms = db::list_vms(&s.db).await?;
+    for v in vms {
+        github_token::stage_for_vm(&s.settings, &v.name).await?;
     }
     Ok(())
 }
