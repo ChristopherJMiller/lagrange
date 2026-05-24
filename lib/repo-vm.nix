@@ -272,8 +272,16 @@ nixpkgs.lib.nixosSystem {
             # session URL/QR code claude prints on startup. The systemd
             # journal only sees `[NNB blob data]` lines for the same
             # output, which isn't useful.
+            # Subcommand flags (per `claude remote-control --help`):
+            #   --name STR              session title at claude.ai/code
+            #   --permission-mode auto  classifier-mediated approval
+            #   --verbose               registration error detail
+            # NOT supported here: --add-dir, --dangerously-skip-permissions,
+            # --sandbox — those are top-level claude flags only.
+            # Default --spawn is `same-dir`, which pre-creates one session
+            # in /home/agent/work and stays up across reconnects.
             exec ${pkgs.util-linux}/bin/script -q \
-              -c "${pkgs.claude-code}/bin/claude remote-control --name ${repoArgs.name} --spawn session --permission-mode auto --add-dir /home/agent/work --verbose" \
+              -c "${pkgs.claude-code}/bin/claude remote-control --name ${repoArgs.name} --permission-mode auto --verbose" \
               /tmp/claude-remote.typescript
           '';
           Restart = "on-failure";
