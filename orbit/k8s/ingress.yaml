@@ -33,7 +33,9 @@ spec:
       http:
         paths:
           # API → admin-service. Mounted on /v1 so the frontend's
-          # relative fetches just work.
+          # absolute fetches (which intentionally do not go through the
+          # /orbit prefix) just work — both paths share the same domain
+          # so the authentik cookie covers both.
           - path: /v1
             pathType: Prefix
             backend:
@@ -41,8 +43,11 @@ spec:
                 name: lagrange-admin     # REPLACE_WITH_ADMIN_SERVICE
                 port:
                   number: 8080
-          # SPA shell + assets
-          - path: /
+          # SPA shell + assets, served from /orbit. The Vite build is
+          # configured with base: '/orbit/' so all asset references stay
+          # under this prefix; the pod also exposes a 302 from / to
+          # /orbit/ as a convenience.
+          - path: /orbit
             pathType: Prefix
             backend:
               service:
