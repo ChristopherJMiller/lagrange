@@ -117,21 +117,26 @@ in
       group = "lagrange-admin";
       home = cfg.stateDir;
       description = "Lagrange admin service";
-      # microvm:    write /var/lib/microvms (mode 0775) for `microvm -c/-d`
+      # kvm:        write /var/lib/microvms (microvm:kvm 0775) for `microvm -c/-d`
+      #             and talk to /dev/kvm via the hypervisor
       # systemd-journal: read `journalctl -u microvm@*` without sudo
-      extraGroups = [ "microvm" "systemd-journal" ];
+      #
+      # microvm.nix's host module only creates the microvm USER (with kvm
+      # as its primary group) and doesn't declare a separate `microvm`
+      # group, so we hang the privilege gate on the existing `kvm` group
+      # — the same one /var/lib/microvms is already owned by.
+      extraGroups = [ "kvm" "systemd-journal" ];
     };
     users.groups.lagrange-admin = { };
 
-    # Allow members of the `microvm` group (i.e. lagrange-admin) to start,
-    # stop, restart, and reload microvm@*.service instances over the system
-    # bus. This is the privilege gate that used to be sudo; polkit is
-    # narrower (per-action, per-unit-glob) and lets us keep
-    # NoNewPrivileges=true on the unit.
+    # Allow members of the `kvm` group (i.e. lagrange-admin and any human
+    # operator who's in kvm) to manage microvm@*.service over the system
+    # bus. polkit is the privilege gate that used to be sudo — narrower
+    # (per-action, per-unit-glob) and lets us keep NoNewPrivileges=true.
     security.polkit.extraConfig = ''
       polkit.addRule(function(action, subject) {
         if (action.id !== "org.freedesktop.systemd1.manage-units") return;
-        if (!subject.isInGroup("microvm")) return;
+        if (!subject.isInGroup("kvm")) return;
         var unit = action.lookup("unit") || "";
         if (unit.indexOf("microvm@") === 0) {
           return polkit.Result.YES;
@@ -219,7 +224,9 @@ in
       "d ${cfg.stateDir}/deploy-keys      0700 lagrange-admin lagrange-admin -"
       "d ${cfg.stateDir}/vm-flakes        0750 lagrange-admin lagrange-admin -"
       "d ${cfg.agentStateRoot}            0750 lagrange-admin lagrange-admin -"
-      "d ${cfg.microvmStateDir}           0775 microvm        microvm        -"
+      # microvm:kvm matches what microvm.nix's host module owns this dir
+      # as. Using a `microvm` group here silently fails — no such group.
+      "z ${cfg.microvmStateDir}           0775 microvm        kvm            -"
     ];
   };
 }

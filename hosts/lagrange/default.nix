@@ -136,8 +136,10 @@ in
   systemd.tmpfiles.rules = [
     "d /var/lib/agent-shared 0755 root  root  -"
     "d /var/lib/cache        0755 root  root  -"
-    # 0775 (not 0755) so lagrange-admin — a microvm-group member — can
-    # write per-VM directories without sudo. See modules/lagrange-admin.nix.
-    "d /var/lib/microvms     0775 microvm microvm -"
+    # 0775 microvm:kvm so lagrange-admin (added to the kvm group in
+    # modules/lagrange-admin.nix) can write per-VM directories without
+    # sudo. `z` (not `d`) so the perms are reapplied to an existing dir
+    # left over from earlier installs that used different ownership.
+    "z /var/lib/microvms     0775 microvm kvm -"
   ];
 }
