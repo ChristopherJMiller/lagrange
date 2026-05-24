@@ -233,6 +233,10 @@ in
       # microvm:kvm matches what microvm.nix's host module owns this dir
       # as. Using a `microvm` group here silently fails — no such group.
       "z ${cfg.microvmStateDir}           0775 microvm        kvm            -"
+      # microvm -c writes per-VM gcroots here; lagrange-admin (in kvm) must
+      # be able to mkdir under it. microvm.nix's host module doesn't create
+      # this with group-writable perms by default.
+      "d /nix/var/nix/gcroots/microvm     0775 microvm        kvm            -"
     ];
   };
 }
