@@ -91,38 +91,96 @@ pub async fn write_vm_flake(
     Ok(())
 }
 
+/// Rewrite a github URL to https + PAT-auth form. Returns None for
+/// non-github URLs so the caller can fall back to SSH (or whatever
+/// the operator pasted).
+///
+/// `x-access-token` is GitHub's documented basic-auth username for
+/// fine-grained PATs; the password is the token itself.
+fn github_https_with_token(url: &str, token: &str) -> Option<String> {
+    let trimmed = url.trim_end_matches(".git");
+    let path = if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("ssh://git@github.com/") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("https://github.com/") {
+        rest
+    } else {
+        return None;
+    };
+    Some(format!(
+        "https://x-access-token:{}@github.com/{}.git",
+        token, path
+    ))
+}
+
+/// Replace credentials in any URL-shaped substring of `s` so secrets
+/// don't leak into logs / API error bodies. Git tends to echo the
+/// remote URL back in its error messages, so we sanitize unconditionally.
+fn redact_url_secrets(s: &str) -> String {
+    // Match `https://user:pass@host…` and blank out the colon-separated
+    // pair. Tolerant of any non-`@`/non-`/` characters in user/pass.
+    let re = regex::Regex::new(r"(https?://)[^/@\s]+:[^@\s]+@").unwrap();
+    re.replace_all(s, "${1}***:***@").into_owned()
+}
+
 pub async fn validate_repo_reachable(
     settings: &Settings,
     repo_url: &str,
     branch: &str,
     name: &str,
+    github_token: Option<&str>,
 ) -> ApiResult<()> {
-    let deploy_key = settings.deploy_key_path(name);
+    // Prefer HTTPS+PAT for github URLs when we have a token — it
+    // sidesteps SSH host-key + key-permission concerns entirely. SSH
+    // is the fallback for non-github remotes or when no PAT is
+    // assigned to this VM.
+    let (effective_url, ssh_needed) = match github_token.and_then(|t| github_https_with_token(repo_url, t)) {
+        Some(https) => (https, false),
+        None => (repo_url.to_string(), true),
+    };
+
     let mut cmd = Command::new("git");
-    if deploy_key.exists() {
-        cmd.env(
-            "GIT_SSH_COMMAND",
-            format!(
-                "ssh -i {} -o StrictHostKeyChecking=accept-new -o BatchMode=yes",
-                deploy_key.display()
-            ),
-        );
+    if ssh_needed {
+        let deploy_key = settings.deploy_key_path(name);
+        // StrictHostKeyChecking=accept-new on BOTH branches — previous
+        // bug was that the no-deploy-key path left this off, so the
+        // first git ls-remote to any host failed with "Host key
+        // verification failed" until someone ssh'd from the
+        // lagrange-admin account once.
+        if deploy_key.exists() {
+            cmd.env(
+                "GIT_SSH_COMMAND",
+                format!(
+                    "ssh -i {} -o StrictHostKeyChecking=accept-new -o BatchMode=yes",
+                    deploy_key.display()
+                ),
+            );
+        } else {
+            cmd.env(
+                "GIT_SSH_COMMAND",
+                "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes",
+            );
+        }
     } else {
-        cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+        // Prevent git from prompting for credentials when the PAT is
+        // wrong — fail loudly instead of hanging waiting on a tty.
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
     }
     let out = cmd
         .arg("ls-remote")
         .arg("--heads")
-        .arg(repo_url)
+        .arg(&effective_url)
         .arg(branch)
         .output()
         .await
         .map_err(|e| ApiError::Subprocess(format!("spawning git: {e}")))?;
 
     if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(ApiError::BadRequest(format!(
             "git ls-remote failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            redact_url_secrets(stderr.trim())
         )));
     }
     if out.stdout.is_empty() {
@@ -344,6 +402,47 @@ mod tests {
     fn nix_str_escapes_quotes_and_backslashes() {
         let out = nix_str("a\"b\\c");
         assert_eq!(out, "\"a\\\"b\\\\c\"");
+    }
+
+    #[test]
+    fn github_https_with_token_handles_ssh_form() {
+        let got = github_https_with_token("git@github.com:foo/bar.git", "abc").unwrap();
+        assert_eq!(got, "https://x-access-token:abc@github.com/foo/bar.git");
+    }
+
+    #[test]
+    fn github_https_with_token_handles_https_form() {
+        let got = github_https_with_token("https://github.com/foo/bar.git", "abc").unwrap();
+        assert_eq!(got, "https://x-access-token:abc@github.com/foo/bar.git");
+    }
+
+    #[test]
+    fn github_https_with_token_handles_no_dotgit_suffix() {
+        let got = github_https_with_token("https://github.com/foo/bar", "abc").unwrap();
+        assert_eq!(got, "https://x-access-token:abc@github.com/foo/bar.git");
+    }
+
+    #[test]
+    fn github_https_with_token_rejects_other_hosts() {
+        // We only convert github URLs; other forges drop through to the
+        // SSH path so the operator's existing setup keeps working.
+        assert!(github_https_with_token("git@gitlab.com:foo/bar.git", "abc").is_none());
+        assert!(github_https_with_token("https://bitbucket.org/foo/bar.git", "abc").is_none());
+        assert!(github_https_with_token("not-a-url", "abc").is_none());
+    }
+
+    #[test]
+    fn redact_url_secrets_strips_basic_auth_from_https() {
+        let line = "fatal: unable to access 'https://x-access-token:ghp_REAL@github.com/foo/bar.git/'";
+        let out = redact_url_secrets(line);
+        assert!(!out.contains("ghp_REAL"), "token leaked: {out}");
+        assert!(out.contains("***:***@"), "expected redaction marker in {out}");
+    }
+
+    #[test]
+    fn redact_url_secrets_leaves_clean_urls_alone() {
+        let line = "fatal: repository 'https://github.com/foo/bar.git' not found";
+        assert_eq!(redact_url_secrets(line), line);
     }
 }
 

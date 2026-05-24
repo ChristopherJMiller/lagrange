@@ -236,7 +236,21 @@ async fn create_repo(
     // Serialize provisioning per-name so a concurrent DELETE/start can't race.
     let _guard = s.lock_vm(&body.name).await;
 
-    vm::validate_repo_reachable(&s.settings, &body.repo_url, &body.branch, &body.name).await?;
+    // Look up the github PAT (if any) for the validate step. With a
+    // PAT we use HTTPS+token and bypass SSH host-key dances; without
+    // one we fall back to the SSH path.
+    let validate_token = match body.github_account.as_deref() {
+        Some(alias) => github_accounts::read_token(&s.settings, alias).await?,
+        None => None,
+    };
+    vm::validate_repo_reachable(
+        &s.settings,
+        &body.repo_url,
+        &body.branch,
+        &body.name,
+        validate_token.as_deref(),
+    )
+    .await?;
 
     let record = db::allocate_and_insert(
         &s.db,

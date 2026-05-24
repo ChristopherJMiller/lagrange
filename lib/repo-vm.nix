@@ -272,17 +272,34 @@ nixpkgs.lib.nixosSystem {
           ExecStart = pkgs.writeShellScript "claude-remote-start" ''
             set -euo pipefail
             cd /home/agent/work
-            # Clone on first run if work/ is empty.
-            if [ ! -d .git ]; then
-              GIT_SSH_COMMAND="ssh -i /home/agent/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new" \
-                ${pkgs.git}/bin/git clone --branch ${repoArgs.branch} ${repoArgs.repoUrl} .
-            fi
-            # If POST /v1/auth/github-token has been called, GITHUB_TOKEN
-            # is now in env from gh.env. Wire git's credential helper to
-            # the gh CLI so the agent can `git push` to authorized repos.
-            # `gh auth setup-git` writes ~/.gitconfig with a helper line.
+
+            # If a github PAT is in env, prefer HTTPS+token over SSH for
+            # both the first clone and any subsequent push/pull:
+            #   1. `gh auth setup-git` writes a credential helper into
+            #      ~/.gitconfig that hands the PAT to git on demand
+            #   2. `insteadOf` rewrites git@github.com: URLs to https
+            #      so the repo_url the admin passed (likely the SSH
+            #      form copied from `gh repo view`) still resolves
+            # Without a PAT we fall back to SSH using a deploy key the
+            # operator dropped into /persistent/ssh.
             if [ -n "''${GITHUB_TOKEN:-}" ]; then
               ${pkgs.gh}/bin/gh auth setup-git
+              ${pkgs.git}/bin/git config --global \
+                url.https://github.com/.insteadOf git@github.com:
+              ${pkgs.git}/bin/git config --global \
+                url.https://github.com/.insteadOf ssh://git@github.com/
+            fi
+
+            # Clone on first run if work/ is empty.
+            if [ ! -d .git ]; then
+              if [ -n "''${GITHUB_TOKEN:-}" ]; then
+                # HTTPS path — credential helper supplies the token,
+                # no SSH host-key dance needed.
+                ${pkgs.git}/bin/git clone --branch ${repoArgs.branch} ${repoArgs.repoUrl} .
+              else
+                GIT_SSH_COMMAND="ssh -i /home/agent/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new" \
+                  ${pkgs.git}/bin/git clone --branch ${repoArgs.branch} ${repoArgs.repoUrl} .
+              fi
             fi
             # `claude remote-control` (subcommand) — server mode. Per
             # Anthropic's docs at /en/remote-control, this registers a
