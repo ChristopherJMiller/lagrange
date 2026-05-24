@@ -83,7 +83,7 @@ struct Health {
 }
 
 async fn system_capacity(State(s): State<AppState>) -> ApiResult<Json<capacity::Capacity>> {
-    Ok(Json(capacity::snapshot(&s.db).await?))
+    Ok(Json(capacity::snapshot(&s.db, &s.settings).await?))
 }
 
 #[derive(Deserialize)]

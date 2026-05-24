@@ -50,6 +50,31 @@ in
       '';
     };
 
+    reservedMemMb = lib.mkOption {
+      type = lib.types.int;
+      default = 2048;
+      description = ''
+        Memory reserved for the host (NixOS, cache daemons, admin
+        service itself, page cache headroom). The capacity endpoint
+        subtracts this from the total when reporting what's
+        assignable to vessels, and the deploy form refuses
+        allocations that would exceed (total - reserved). Tune up
+        if you see the satellite swapping with vessels at "100%".
+      '';
+    };
+
+    reservedVcpu = lib.mkOption {
+      type = lib.types.int;
+      default = 1;
+      description = ''
+        vCPUs reserved for the host. Mostly informational — vCPU is
+        time-sliced and allowed to overcommit — but the capacity
+        endpoint exposes this for the deploy-form bar so the
+        operator sees how much of the host's compute is nominally
+        the satellite's.
+      '';
+    };
+
     microvmStateDir = lib.mkOption {
       type = lib.types.path;
       default = "/var/lib/microvms";
@@ -207,6 +232,8 @@ in
         LAGRANGE_AGENT_STATE_ROOT = cfg.agentStateRoot;
         LAGRANGE_AGENT_SHARED_DIR = cfg.agentSharedDir;
         LAGRANGE_MICROVM_DIR = cfg.microvmStateDir;
+        LAGRANGE_RESERVED_MEM_MB = toString cfg.reservedMemMb;
+        LAGRANGE_RESERVED_VCPU = toString cfg.reservedVcpu;
         LAGRANGE_FLAKE_REF = cfg.flakeRef;
         LAGRANGE_TOKEN_FILE = toString cfg.tokenFile;
         RUST_LOG = cfg.logLevel;

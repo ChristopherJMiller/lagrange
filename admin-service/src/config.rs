@@ -33,6 +33,13 @@ pub struct Settings {
     /// internal listener entirely — tests and isolated dev setups don't
     /// need it.
     pub internal_bind: Option<String>,
+    /// Host headroom: subtracted from /proc/meminfo MemTotal before
+    /// computing assignable capacity. Surfaced on /v1/system/capacity
+    /// so orbit's deploy form can refuse over-allocation.
+    pub reserved_mem_mb: i64,
+    /// vCPU equivalent. Informational — vCPU is time-sliced — but
+    /// rendered on the capacity bar so the operator sees host overhead.
+    pub reserved_vcpu: i64,
 }
 
 impl Settings {
@@ -61,6 +68,14 @@ impl Settings {
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
+        let reserved_mem_mb = std::env::var("LAGRANGE_RESERVED_MEM_MB")
+            .ok()
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(2048);
+        let reserved_vcpu = std::env::var("LAGRANGE_RESERVED_VCPU")
+            .ok()
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(1);
 
         Ok(Self {
             bind,
@@ -75,6 +90,8 @@ impl Settings {
             vm_subnet_gateway,
             trusted_sso_peer,
             internal_bind,
+            reserved_mem_mb,
+            reserved_vcpu,
         })
     }
 

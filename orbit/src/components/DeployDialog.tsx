@@ -4,12 +4,14 @@ import { Field } from './ui/Input'
 import { Button } from './ui/Button'
 import { SectionHeader } from './ui/Bracket'
 import { RepoPicker } from './RepoPicker'
+import { CapacityBar } from './CapacityBar'
 import { useUi } from '../store/ui'
 import { api } from '../api/client'
 import { isApiError, type PermissionMode } from '../api/types'
 import { refreshNow } from '../api/hooks'
 import { formatMem } from '../lib/time'
 import { cn } from '../lib/cn'
+import { TIERS, type TierId, tierForSize } from '../lib/tiers'
 
 const NAME_RE = /^[a-z0-9-]{1,12}$/
 
@@ -24,7 +26,7 @@ export function DeployDialog() {
   const [name, setName] = useState('')
   const [repoUrl, setRepoUrl] = useState('')
   const [branch, setBranch] = useState('main')
-  const [showAdv, setShowAdv] = useState(false)
+  const [tier, setTier] = useState<TierId>('medium')
   const [vcpu, setVcpu] = useState(4)
   const [memGib, setMemGib] = useState(4)
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('auto')
@@ -32,8 +34,6 @@ export function DeployDialog() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // When opening: default to the single available account, or whichever
-  // alias is most recent.
   useEffect(() => {
     if (!open) return
     if (githubAccount && presentAccounts.some((a) => a.alias === githubAccount)) return
@@ -45,15 +45,32 @@ export function DeployDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, presentAccounts.length])
 
+  // Keep tier in sync if vcpu/memGib were nudged by something else
+  // (e.g. selecting a tier — round-trip should match).
+  useEffect(() => {
+    if (tier === 'custom') return
+    const inferred = tierForSize(vcpu, memGib * 1024)
+    if (inferred !== tier) setTier(inferred)
+  }, [vcpu, memGib, tier])
+
+  function pickTier(id: TierId) {
+    setTier(id)
+    if (id !== 'custom') {
+      const t = TIERS.find((tt) => tt.id === id)!
+      setVcpu(t.vcpu)
+      setMemGib(t.memGib)
+    }
+  }
+
   function reset() {
     setName('')
     setRepoUrl('')
     setBranch('main')
+    setTier('medium')
     setVcpu(4)
     setMemGib(4)
     setPermissionMode('auto')
     setGithubAccount(presentAccounts.length === 1 ? presentAccounts[0].alias : null)
-    setShowAdv(false)
     setError(null)
     setSubmitting(false)
   }
@@ -69,10 +86,10 @@ export function DeployDialog() {
   const repoErr = repoUrl.length === 0 ? null : repoUrl.length < 4 ? 'too short' : null
   const formValid = NAME_RE.test(name) && repoUrl.length >= 4 && !!branch
 
-  // Capacity headroom warning (memory only — vCPU is allowed to overcommit).
   const memMb = memGib * 1024
+  const proposed = { name: name || 'new', vcpu, mem_mb: memMb }
   const memHeadroom = capacity
-    ? capacity.host.mem_mb - capacity.allocated.mem_mb - memMb
+    ? capacity.host.assignable_mem_mb - capacity.allocated.mem_mb - memMb
     : null
   const memWouldOverfill = memHeadroom !== null && memHeadroom < 0
 
@@ -109,7 +126,7 @@ export function DeployDialog() {
       onOpenChange={handleOpenChange}
       title="Deploy Vessel"
       subtitle="new repo-vm provisioning"
-      maxWidth="max-w-lg"
+      maxWidth="max-w-2xl"
     >
       <form onSubmit={submit} className="space-y-4">
         <SectionHeader label="Identity" />
@@ -171,6 +188,67 @@ export function DeployDialog() {
           onChange={(e) => setBranch(e.target.value.trim())}
         />
 
+        <SectionHeader label="Size" />
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+          {TIERS.map((t) => (
+            <TierTile
+              key={t.id}
+              active={tier === t.id}
+              onClick={() => pickTier(t.id)}
+              label={t.label}
+              vcpu={t.vcpu}
+              memGib={t.memGib}
+              blurb={t.blurb}
+            />
+          ))}
+          <TierTile
+            active={tier === 'custom'}
+            onClick={() => pickTier('custom')}
+            label="custom"
+            blurb="dial it in"
+            custom
+          />
+        </div>
+        {tier === 'custom' && (
+          <div className="grid grid-cols-2 gap-3 border border-border/60 bg-surface-2/50 p-3">
+            <Field
+              label="vCPU"
+              name="vcpu"
+              type="number"
+              min={1}
+              max={32}
+              value={vcpu}
+              hint={capacity ? `host has ${capacity.host.cpus}` : '1–32'}
+              onChange={(e) =>
+                setVcpu(Math.max(1, Math.min(32, parseInt(e.target.value || '4', 10))))
+              }
+            />
+            <Field
+              label="Memory (GiB)"
+              name="mem"
+              type="number"
+              min={1}
+              max={128}
+              value={memGib}
+              hint={capacity ? `host has ${formatMem(capacity.host.mem_mb)}` : '1–128'}
+              onChange={(e) =>
+                setMemGib(Math.max(1, Math.min(128, parseInt(e.target.value || '4', 10))))
+              }
+            />
+          </div>
+        )}
+
+        {/* gparted-style live preview */}
+        {capacity && (
+          <div className="border border-border/60 bg-surface-2/40 p-3 space-y-3">
+            <div className="text-[10px] uppercase tracking-widest text-dim">
+              After this deploy
+            </div>
+            <CapacityBar cap={capacity} resource="mem" proposed={proposed} compact />
+            <CapacityBar cap={capacity} resource="vcpu" proposed={proposed} compact />
+          </div>
+        )}
+
         <SectionHeader label="Permissions" />
         <div className="grid grid-cols-2 gap-2">
           <PermissionTile
@@ -189,45 +267,12 @@ export function DeployDialog() {
           />
         </div>
 
-        <div>
-          <button
-            type="button"
-            onClick={() => setShowAdv((v) => !v)}
-            className="text-[10px] uppercase tracking-widest text-dim hover:text-text"
-          >
-            {showAdv ? '▾' : '▸'} Advanced (vCPU / RAM)
-          </button>
-        </div>
-        {showAdv && (
-          <div className="grid grid-cols-2 gap-3 border border-border/60 bg-surface-2/50 p-3">
-            <Field
-              label="vCPU"
-              name="vcpu"
-              type="number"
-              min={1}
-              max={32}
-              value={vcpu}
-              hint={capacity ? `host has ${capacity.host.cpus}` : '1–32'}
-              onChange={(e) => setVcpu(Math.max(1, Math.min(32, parseInt(e.target.value || '4', 10))))}
-            />
-            <Field
-              label="Memory (GiB)"
-              name="mem"
-              type="number"
-              min={1}
-              max={128}
-              value={memGib}
-              hint={capacity ? `host has ${formatMem(capacity.host.mem_mb)}` : '1–128'}
-              onChange={(e) => setMemGib(Math.max(1, Math.min(128, parseInt(e.target.value || '4', 10))))}
-            />
-          </div>
-        )}
-
         {memWouldOverfill && (
           <div className="border border-amber/40 bg-amber/[0.05] px-3 py-2 text-xs text-amber">
             <span className="text-[10px] uppercase tracking-widest">! capacity</span>
             <span className="ml-2 font-mono">
-              would exceed host memory by {formatMem(-memHeadroom!)} — destroy a vessel or pick smaller
+              would exceed assignable memory by {formatMem(-memHeadroom!)} — destroy a vessel,
+              shrink the tier, or bump reservedMemMb in the module
             </span>
           </div>
         )}
@@ -251,7 +296,7 @@ export function DeployDialog() {
               type="submit"
               variant="hero"
               size="md"
-              disabled={!formValid}
+              disabled={!formValid || memWouldOverfill}
               loading={submitting}
             >
               {submitting ? 'Launching…' : 'Launch ▸'}
@@ -260,6 +305,52 @@ export function DeployDialog() {
         </div>
       </form>
     </Dialog>
+  )
+}
+
+function TierTile({
+  active,
+  onClick,
+  label,
+  vcpu,
+  memGib,
+  blurb,
+  custom,
+}: {
+  active: boolean
+  onClick: () => void
+  label: string
+  vcpu?: number
+  memGib?: number
+  blurb: string
+  custom?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'border px-2.5 py-2 text-left transition-colors',
+        active
+          ? 'border-cyan bg-cyan/[0.05]'
+          : 'border-border bg-surface-2/40 hover:border-border-bright',
+      )}
+    >
+      <div
+        className={cn(
+          'text-[11px] uppercase tracking-widest',
+          active ? 'text-cyan' : 'text-text',
+        )}
+      >
+        {label}
+      </div>
+      {!custom && (
+        <div className="mt-0.5 font-mono text-[11px] tabular-nums text-text">
+          {vcpu} <span className="text-dimmer">·</span> {memGib} GiB
+        </div>
+      )}
+      <div className="mt-0.5 text-[10px] text-dim leading-tight truncate">{blurb}</div>
+    </button>
   )
 }
 

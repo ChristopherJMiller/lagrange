@@ -22,9 +22,24 @@ export type GithubAccount = {
   created_at: string
 }
 
+export type CapacityVessel = {
+  name: string
+  vcpu: number
+  mem_mb: number
+  status: string
+}
+
 export type CapacityDto = {
-  host: { cpus: number; mem_mb: number }
+  host: {
+    cpus: number
+    mem_mb: number
+    reserved_mem_mb: number
+    reserved_vcpu: number
+    assignable_mem_mb: number
+    assignable_cpus: number
+  }
   allocated: { vms: number; vcpu: number; mem_mb: number }
+  vessels: CapacityVessel[]
 }
 
 export type GithubRepoDto = {

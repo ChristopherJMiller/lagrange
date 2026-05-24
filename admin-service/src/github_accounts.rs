@@ -255,6 +255,8 @@ mod tests {
             vm_subnet_gateway: "10.42.0.1".into(),
             trusted_sso_peer: None,
             internal_bind: None,
+            reserved_mem_mb: 2048,
+            reserved_vcpu: 1,
         }
     }
 
