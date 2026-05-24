@@ -256,15 +256,22 @@ nixpkgs.lib.nixosSystem {
               GIT_SSH_COMMAND="ssh -i /home/agent/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new" \
                 ${pkgs.git}/bin/git clone --branch ${repoArgs.branch} ${repoArgs.repoUrl} .
             fi
-            # --remote-control NAME is a flag, not a subcommand (the old
-            # `claude remote-control --spawn session` syntax is gone in
-            # current claude-code).
-            # --dangerously-skip-permissions: the VM is the sandbox; we
-            # don't want claude blocking on a workspace-trust prompt that
-            # nobody is there to answer.
-            exec ${pkgs.util-linux}/bin/script -qc \
-              "${pkgs.claude-code}/bin/claude --remote-control ${repoArgs.name} --dangerously-skip-permissions" \
-              /dev/null
+            # `claude remote-control` (subcommand, no `--`) is server
+            # mode — no local prompt, the terminal just registers a
+            # session and waits for remote connections from claude.ai/code.
+            # That's what we want for a headless microvm. The undocumented
+            # subcommand is the same one anthropics/claude-code#28038 asks
+            # for docs about; we know it exists from blog write-ups.
+            # --permission-mode auto: classifier-mediated approval.
+            # --add-dir: trust /home/agent/work explicitly so claude
+            # doesn't block waiting on a workspace-trust dialog.
+            # script -q writes a typescript of the TUI to /tmp so
+            # operators can read the session URL/QR code claude prints
+            # on startup (the systemd journal sees `[NNB blob data]`
+            # lines because the output is terminal escape sequences).
+            exec ${pkgs.util-linux}/bin/script -q \
+              -c "${pkgs.claude-code}/bin/claude remote-control --permission-mode auto --add-dir /home/agent/work" \
+              /tmp/claude-remote.typescript
           '';
           Restart = "on-failure";
           RestartSec = 30;
