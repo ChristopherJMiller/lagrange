@@ -26,6 +26,9 @@ pub enum ApiError {
     #[error("subprocess failed: {0}")]
     Subprocess(String),
 
+    #[error("upstream error: {0}")]
+    Upstream(String),
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -50,6 +53,11 @@ impl IntoResponse for ApiError {
                 StatusCode::SERVICE_UNAVAILABLE,
                 "ip_pool_exhausted",
                 None,
+            ),
+            ApiError::Upstream(_) => (
+                StatusCode::BAD_GATEWAY,
+                "upstream_error",
+                Some(self.to_string()),
             ),
             ApiError::Database(_) | ApiError::Io(_) | ApiError::Subprocess(_) | ApiError::Other(_) => {
                 tracing::error!(error = ?self, "internal error");

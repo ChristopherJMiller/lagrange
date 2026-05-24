@@ -5,11 +5,13 @@ import { Background } from './components/Background'
 import { Header } from './components/Header'
 import { Footer } from './components/Footer'
 import { CredentialStatusRow } from './components/CredentialStatusRow'
+import { CapacityRow } from './components/CapacityRow'
 import { VesselGrid } from './components/VesselGrid'
 import { DeployDialog } from './components/DeployDialog'
 import { DestroyDialog } from './components/DestroyDialog'
 import { CredentialWizard } from './components/CredentialWizard'
 import { LogsDrawer } from './components/LogsDrawer'
+import { ClaudeMdEditor } from './components/ClaudeMdEditor'
 import { Toaster } from './components/Toaster'
 
 export default function App() {
@@ -39,6 +41,7 @@ export default function App() {
         <Header />
         <main className="flex-1 px-6 lg:px-10 max-w-[1600px] mx-auto w-full">
           <CredentialStatusRow />
+          <CapacityRow />
           <VesselGrid />
         </main>
         <Footer />
@@ -47,6 +50,7 @@ export default function App() {
       <DestroyDialog />
       <CredentialWizard />
       <LogsDrawer />
+      <ClaudeMdEditor />
       <Toaster />
     </>
   )

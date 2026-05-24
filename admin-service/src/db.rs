@@ -22,6 +22,7 @@ pub struct RepoVm {
     pub last_stopped_at: Option<DateTime<Utc>>,
     pub claude_session_name: Option<String>,
     pub claude_session_url: Option<String>,
+    pub permission_mode: String,
 }
 
 pub async fn connect_and_migrate(path: &Path) -> anyhow::Result<SqlitePool> {
@@ -79,6 +80,7 @@ pub async fn allocate_and_insert(
     vm_mac_from_ip: impl Fn(&str) -> String,
     vcpu: i64,
     mem_mb: i64,
+    permission_mode: &str,
 ) -> ApiResult<RepoVm> {
     let mut tx = pool.begin().await?;
     sqlx::query("BEGIN IMMEDIATE").execute(&mut *tx).await.ok();
@@ -96,8 +98,8 @@ pub async fn allocate_and_insert(
     sqlx::query(
         r#"
         INSERT INTO repo_vms
-          (name, repo_url, branch, vm_ip, vm_mac, vcpu, mem_mb, status, created_at)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+          (name, repo_url, branch, vm_ip, vm_mac, vcpu, mem_mb, status, created_at, permission_mode)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
         "#,
     )
     .bind(name)
@@ -109,6 +111,7 @@ pub async fn allocate_and_insert(
     .bind(mem_mb)
     .bind(VmStatus::Provisioning.as_str())
     .bind(now.to_rfc3339())
+    .bind(permission_mode)
     .execute(&mut *tx)
     .await
     .map_err(|e| {
@@ -299,6 +302,9 @@ fn row_to_vm(row: sqlx::sqlite::SqliteRow) -> RepoVm {
         last_stopped_at: row.try_get::<String, _>("last_stopped_at").ok().map(parse_dt),
         claude_session_name: row.try_get("claude_session_name").ok(),
         claude_session_url: row.try_get("claude_session_url").ok(),
+        permission_mode: row
+            .try_get::<String, _>("permission_mode")
+            .unwrap_or_else(|_| "auto".to_string()),
     }
 }
 

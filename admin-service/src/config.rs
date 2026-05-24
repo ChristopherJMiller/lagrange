@@ -10,6 +10,10 @@ pub struct Settings {
     pub bind: String,
     pub state_dir: PathBuf,
     pub agent_state_root: PathBuf,
+    /// Host directory mirrored read-only into every guest at /shared.
+    /// Contains the operator-editable CLAUDE.md plus store-managed
+    /// commands/ and skills/ symlinks.
+    pub agent_shared_dir: PathBuf,
     pub microvm_dir: PathBuf,
     pub flake_ref: String,
     pub token_file: PathBuf,
@@ -36,6 +40,7 @@ impl Settings {
         let bind = std::env::var("LAGRANGE_BIND").unwrap_or_else(|_| "10.99.0.2:8443".to_string());
         let state_dir = path_env("LAGRANGE_STATE_DIR", "/var/lib/lagrange-admin");
         let agent_state_root = path_env("LAGRANGE_AGENT_STATE_ROOT", "/var/lib/agent-state");
+        let agent_shared_dir = path_env("LAGRANGE_AGENT_SHARED_DIR", "/var/lib/agent-shared");
         let microvm_dir = path_env("LAGRANGE_MICROVM_DIR", "/var/lib/microvms");
         let flake_ref = std::env::var("LAGRANGE_FLAKE_REF")
             .unwrap_or_else(|_| "github:christopherjmiller/lagrange".to_string());
@@ -61,6 +66,7 @@ impl Settings {
             bind,
             state_dir,
             agent_state_root,
+            agent_shared_dir,
             microvm_dir,
             flake_ref,
             token_file,

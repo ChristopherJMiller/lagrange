@@ -8,6 +8,7 @@ export function Header() {
   const health = useUi((s) => s.health)
   const lastFetched = useUi((s) => s.lastFetched)
   const vmsError = useUi((s) => s.vmsError)
+  const openClaudeMd = useUi((s) => s.openClaudeMd)
 
   const [, force] = useState(0)
   useEffect(() => {
@@ -82,6 +83,16 @@ export function Header() {
           <span>T+</span>
           <span className="tabular-nums text-text">{utcClock()}</span>
         </div>
+
+        {/* Edit shared CLAUDE.md */}
+        <button
+          onClick={openClaudeMd}
+          className="flex items-center gap-1.5 border border-border bg-surface-2/40 px-2.5 py-1 text-[10px] uppercase tracking-widest text-dim hover:border-cyan hover:text-cyan transition-colors"
+          title="Edit the user-level CLAUDE.md mounted into every vessel"
+        >
+          <span className="text-cyan/70">▤</span>
+          <span>Shared CLAUDE.md</span>
+        </button>
       </div>
     </header>
   )

@@ -1,8 +1,11 @@
 import type {
+  AgentClaudeMdDto,
   ApiError,
+  CapacityDto,
   CreateVmReq,
   CreateVmResp,
   CredStatus,
+  GithubRepoDto,
   HealthDto,
   VmDto,
 } from './types'
@@ -49,6 +52,14 @@ async function request<T = unknown>(path: string, init?: RequestInit): Promise<T
 
 export const api = {
   health: () => request<HealthDto>('/v1/health'),
+  capacity: () => request<CapacityDto>('/v1/system/capacity'),
+  listGithubRepos: () => request<GithubRepoDto[]>('/v1/github/repos'),
+  getAgentClaudeMd: () => request<AgentClaudeMdDto>('/v1/agent/claude-md'),
+  putAgentClaudeMd: (content: string) =>
+    request<void>('/v1/agent/claude-md', {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    }),
 
   listVms: () => request<VmDto[]>('/v1/repos'),
   getVm: (n: string) => request<VmDto>(`/v1/repos/${encodeURIComponent(n)}`),

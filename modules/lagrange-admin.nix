@@ -39,6 +39,17 @@ in
       default = "/var/lib/agent-state";
     };
 
+    agentSharedDir = lib.mkOption {
+      type = lib.types.path;
+      default = "/var/lib/agent-shared";
+      description = ''
+        Host directory mirrored read-only into every guest at /shared.
+        The lagrange-admin service writes CLAUDE.md in here when the
+        operator edits it from orbit. Must match
+        modules/shared-agent-state.nix tmpfiles paths.
+      '';
+    };
+
     microvmStateDir = lib.mkOption {
       type = lib.types.path;
       default = "/var/lib/microvms";
@@ -187,6 +198,7 @@ in
         LAGRANGE_BIND = "${cfg.bindAddress}:${toString cfg.bindPort}";
         LAGRANGE_STATE_DIR = cfg.stateDir;
         LAGRANGE_AGENT_STATE_ROOT = cfg.agentStateRoot;
+        LAGRANGE_AGENT_SHARED_DIR = cfg.agentSharedDir;
         LAGRANGE_MICROVM_DIR = cfg.microvmStateDir;
         LAGRANGE_FLAKE_REF = cfg.flakeRef;
         LAGRANGE_TOKEN_FILE = toString cfg.tokenFile;
@@ -227,6 +239,7 @@ in
         ReadWritePaths = [
           cfg.stateDir
           cfg.agentStateRoot
+          cfg.agentSharedDir
           cfg.microvmStateDir
           # microvm -c creates per-VM GC roots at
           # /nix/var/nix/gcroots/microvm/<name> to keep the built closure

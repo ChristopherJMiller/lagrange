@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { CredStatus, HealthDto, VmDto } from '../api/types'
+import type { CapacityDto, CredStatus, HealthDto, VmDto } from '../api/types'
 
 export type CredKind = 'credentials' | 'github'
 
@@ -14,6 +14,7 @@ type UiState = {
   lastFetched: number | null
 
   health: HealthDto | null
+  capacity: CapacityDto | null
   creds: Record<CredKind, CredStatus | null>
 
   // optimistic in-flight per-VM actions
@@ -25,6 +26,7 @@ type UiState = {
   wizardOpen: boolean
   wizardForced: boolean // open because no creds present
   logsTarget: VmDto | null
+  claudeMdOpen: boolean
 
   // toasts
   toasts: ToastItem[]
@@ -32,6 +34,7 @@ type UiState = {
   setVms: (vms: VmDto[]) => void
   setVmsError: (err: string | null) => void
   setHealth: (h: HealthDto | null) => void
+  setCapacity: (c: CapacityDto | null) => void
   setCred: (kind: CredKind, v: CredStatus | null) => void
   markInitialLoaded: () => void
   setLastFetched: (ts: number) => void
@@ -45,6 +48,8 @@ type UiState = {
   closeWizard: () => void
   openLogs: (vm: VmDto) => void
   closeLogs: () => void
+  openClaudeMd: () => void
+  closeClaudeMd: () => void
 
   toast: (kind: ToastKind, msg: string) => void
   dismissToast: (id: string) => void
@@ -57,6 +62,7 @@ export const useUi = create<UiState>((set) => ({
   lastFetched: null,
 
   health: null,
+  capacity: null,
   creds: { credentials: null, github: null },
 
   busy: {},
@@ -66,12 +72,14 @@ export const useUi = create<UiState>((set) => ({
   wizardOpen: false,
   wizardForced: false,
   logsTarget: null,
+  claudeMdOpen: false,
 
   toasts: [],
 
   setVms: (vms) => set({ vms }),
   setVmsError: (err) => set({ vmsError: err }),
   setHealth: (h) => set({ health: h }),
+  setCapacity: (c) => set({ capacity: c }),
   setCred: (kind, v) =>
     set((s) => ({ creds: { ...s.creds, [kind]: v } })),
   markInitialLoaded: () => set({ initialLoad: false }),
@@ -92,6 +100,8 @@ export const useUi = create<UiState>((set) => ({
   closeWizard: () => set({ wizardOpen: false, wizardForced: false }),
   openLogs: (vm) => set({ logsTarget: vm }),
   closeLogs: () => set({ logsTarget: null }),
+  openClaudeMd: () => set({ claudeMdOpen: true }),
+  closeClaudeMd: () => set({ claudeMdOpen: false }),
 
   toast: (kind, msg) =>
     set((s) => ({

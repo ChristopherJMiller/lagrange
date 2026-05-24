@@ -39,6 +39,7 @@ pub async fn write_vm_flake(
     vm_mac: &str,
     vcpu: i64,
     mem_mb: i64,
+    permission_mode: &str,
 ) -> ApiResult<()> {
     let dir = settings.vm_flake_dir(name);
     // Nuke and recreate so a stale flake.lock from a prior create can't
@@ -66,6 +67,7 @@ pub async fn write_vm_flake(
       vmMac = {vm_mac};
       vcpu = {vcpu};
       memMb = {mem_mb};
+      permissionMode = {permission_mode};
     }};
   }};
 }}
@@ -79,6 +81,7 @@ pub async fn write_vm_flake(
         vm_mac = nix_str(vm_mac),
         vcpu = vcpu,
         mem_mb = mem_mb,
+        permission_mode = nix_str(permission_mode),
     );
 
     let path = dir.join("flake.nix");

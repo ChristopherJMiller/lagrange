@@ -228,6 +228,7 @@ mod tests {
             bind: "127.0.0.1:0".into(),
             state_dir: state.to_path_buf(),
             agent_state_root: agent.to_path_buf(),
+            agent_shared_dir: PathBuf::from("/tmp/unused"),
             microvm_dir: PathBuf::from("/tmp/unused"),
             flake_ref: "github:unused/unused".into(),
             token_file: PathBuf::from("/tmp/unused"),

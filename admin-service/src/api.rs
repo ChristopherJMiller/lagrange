@@ -1,7 +1,10 @@
 use crate::auth::{require_auth, AuthCfg};
+use crate::agent_claude_md;
+use crate::capacity;
 use crate::credentials;
 use crate::db::{self, VmStatus};
 use crate::error::{ApiError, ApiResult};
+use crate::github_repos;
 use crate::github_token;
 use crate::state::AppState;
 use crate::vm;
@@ -26,6 +29,12 @@ static NAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-z0-9-]{1,12}$").unwr
 pub fn router(state: AppState, auth: Arc<AuthCfg>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/system/capacity", get(system_capacity))
+        .route("/v1/github/repos", get(list_github_repos))
+        .route(
+            "/v1/agent/claude-md",
+            get(get_agent_claude_md).put(put_agent_claude_md),
+        )
         .route("/v1/repos", get(list_repos).post(create_repo))
         .route("/v1/repos/:name", get(get_repo).delete(destroy_repo))
         .route("/v1/repos/:name/start", post(start_repo))
@@ -68,6 +77,36 @@ struct Health {
     vms_total: u32,
 }
 
+async fn system_capacity(State(s): State<AppState>) -> ApiResult<Json<capacity::Capacity>> {
+    Ok(Json(capacity::snapshot(&s.db).await?))
+}
+
+async fn list_github_repos(
+    State(s): State<AppState>,
+) -> ApiResult<Json<Vec<github_repos::Repo>>> {
+    Ok(Json(github_repos::list_for_operator(&s.settings).await?))
+}
+
+async fn get_agent_claude_md(
+    State(s): State<AppState>,
+) -> ApiResult<Json<agent_claude_md::Snapshot>> {
+    Ok(Json(agent_claude_md::read(&s.settings).await?))
+}
+
+#[derive(Deserialize)]
+struct PutAgentClaudeMd {
+    content: String,
+}
+
+async fn put_agent_claude_md(
+    State(s): State<AppState>,
+    Json(body): Json<PutAgentClaudeMd>,
+) -> ApiResult<StatusCode> {
+    agent_claude_md::write(&s.settings, &body.content).await?;
+    tracing::info!(bytes = body.content.len(), "shared CLAUDE.md updated");
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn health(State(s): State<AppState>) -> ApiResult<Json<Health>> {
     let all = db::list_vms(&s.db).await?;
     let total = all.len() as u32;
@@ -90,6 +129,8 @@ struct CreateRepo {
     vcpu: i64,
     #[serde(default = "default_mem")]
     mem_mb: i64,
+    #[serde(default = "default_permission_mode")]
+    permission_mode: String,
 }
 
 fn default_branch() -> String {
@@ -100,6 +141,18 @@ fn default_vcpu() -> i64 {
 }
 fn default_mem() -> i64 {
     4096
+}
+fn default_permission_mode() -> String {
+    "auto".into()
+}
+
+fn validate_permission_mode(s: &str) -> ApiResult<()> {
+    match s {
+        "auto" | "dangerously-skip" => Ok(()),
+        _ => Err(ApiError::BadRequest(
+            "permission_mode must be 'auto' or 'dangerously-skip'".into(),
+        )),
+    }
 }
 
 #[derive(Serialize)]
@@ -125,6 +178,7 @@ async fn create_repo(
     if !(512..=131_072).contains(&body.mem_mb) {
         return Err(ApiError::BadRequest("mem_mb out of range".into()));
     }
+    validate_permission_mode(&body.permission_mode)?;
 
     // Serialize provisioning per-name so a concurrent DELETE/start can't race.
     let _guard = s.lock_vm(&body.name).await;
@@ -139,6 +193,7 @@ async fn create_repo(
         vm::mac_from_ip,
         body.vcpu,
         body.mem_mb,
+        &body.permission_mode,
     )
     .await?;
 
@@ -159,6 +214,7 @@ async fn create_repo(
         &mac,
         body.vcpu,
         body.mem_mb,
+        &body.permission_mode,
     )
     .await
     {
@@ -200,6 +256,7 @@ struct VmDto {
     runtime_active: bool,
     claude_session_name: Option<String>,
     claude_session_url: Option<String>,
+    permission_mode: String,
 }
 
 impl VmDto {
@@ -215,6 +272,7 @@ impl VmDto {
             runtime_active: active,
             claude_session_name: r.claude_session_name,
             claude_session_url: r.claude_session_url,
+            permission_mode: r.permission_mode,
         }
     }
 }
@@ -386,6 +444,9 @@ async fn set_github_token(
 ) -> ApiResult<StatusCode> {
     github_token::set(&s.settings, &body.token).await?;
     restage_all_vm_github_tokens(&s).await?;
+    // The repo-list endpoint caches by token; a new token may have
+    // different visibility so blow the cache.
+    github_repos::invalidate_cache();
     tracing::info!("github-token set; restaged all VM env files");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -393,6 +454,7 @@ async fn set_github_token(
 async fn delete_github_token(State(s): State<AppState>) -> ApiResult<StatusCode> {
     github_token::clear(&s.settings).await?;
     restage_all_vm_github_tokens(&s).await?;
+    github_repos::invalidate_cache();
     tracing::info!("github-token cleared; removed per-VM env files");
     Ok(StatusCode::NO_CONTENT)
 }

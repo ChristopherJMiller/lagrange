@@ -22,6 +22,14 @@
 , vcpu ? 4
 , memMb ? 4096
 , balloonMb ? null
+  # "auto" (classifier-mediated approval, default) or "dangerously-skip"
+  # (no approval gate; for trusted-environment vessels). The two values
+  # land at DIFFERENT positions in the claude invocation —
+  # --permission-mode is a remote-control subcommand flag, but
+  # --dangerously-skip-permissions is a top-level claude flag. The DB
+  # CHECK in admin-service/migrations/20260524120000_permission_mode.sql
+  # mirrors this enum.
+, permissionMode ? "auto"
   # Default to the operator's published key so freshly-created VMs are
   # debuggable over SSH (port 22 on the VM's bridge IP, 10.42.0.X) without
   # the admin service having to thread an SSH key through. Override per-VM
@@ -35,14 +43,23 @@ nixpkgs.lib.nixosSystem {
   specialArgs = {
     inherit microvm claude-code;
     repoArgs = {
-      inherit name repoUrl branch vmIp vmMac vcpu memMb operatorSshKey;
+      inherit name repoUrl branch vmIp vmMac vcpu memMb operatorSshKey permissionMode;
     };
   };
 
   modules = [
     microvm.nixosModules.microvm
 
-    ({ config, pkgs, lib, repoArgs, ... }: {
+    ({ config, pkgs, lib, repoArgs, ... }: let
+      # claude invocation differs by permission mode. --dangerously-skip-permissions
+      # is a TOP-LEVEL claude flag (before the subcommand); --permission-mode
+      # is a remote-control subcommand flag.
+      claudeInvocation =
+        if repoArgs.permissionMode == "dangerously-skip" then
+          "${pkgs.claude-code}/bin/claude --dangerously-skip-permissions remote-control --name ${repoArgs.name} --spawn same-dir --verbose"
+        else
+          "${pkgs.claude-code}/bin/claude remote-control --name ${repoArgs.name} --spawn same-dir --permission-mode auto --verbose";
+    in {
       system.stateVersion = "25.11";
 
       ###### microVM configuration
@@ -296,7 +313,7 @@ nixpkgs.lib.nixosSystem {
             # this flag, claude blocks indefinitely waiting on keyboard
             # input that never comes.
             exec ${pkgs.util-linux}/bin/script -q \
-              -c "${pkgs.claude-code}/bin/claude remote-control --name ${repoArgs.name} --spawn same-dir --permission-mode auto --verbose" \
+              -c "${claudeInvocation}" \
               /tmp/claude-remote.typescript
           '';
           Restart = "on-failure";

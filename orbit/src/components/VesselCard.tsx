@@ -191,6 +191,18 @@ export function VesselCard({ vm }: { vm: VmDto }) {
             )
           }
         />
+        <DataRow
+          label="PERMS"
+          value={
+            vm.permission_mode === 'dangerously-skip' ? (
+              <span className="text-red" title="Approval gate disabled — full autonomy">
+                ⚠ dangerously-skip
+              </span>
+            ) : (
+              <span className="text-text">auto</span>
+            )
+          }
+        />
       </div>
 
       {/* divider */}

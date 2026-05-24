@@ -5,12 +5,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
+mod agent_claude_md;
 mod api;
 mod auth;
+mod capacity;
 mod config;
 mod credentials;
 mod db;
 mod error;
+mod github_repos;
 mod github_token;
 mod state;
 mod vm;
