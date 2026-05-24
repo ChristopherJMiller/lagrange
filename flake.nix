@@ -159,6 +159,11 @@
           fd
           curl
           httpie
+          # orbit/ frontend — vite dev server, vitest, tsc, etc.
+          nodejs_22
+          pnpm_9
+          # Container build for orbit/ (used by k8s deploy)
+          docker-client
           # Nix test running (qemu used by the test framework; pulling it in
           # makes test re-runs warm)
           qemu
@@ -172,6 +177,11 @@
           echo "  nix build .#checks.${system}.admin-service-smoke -L  # VM smoke test"
           echo "  nix build .#checks.${system}.cache-layer-up -L       # VM cache test"
           echo "  nix flake check -L                                  # everything"
+          echo
+          echo "orbit/ frontend:"
+          echo "  (cd orbit && pnpm install)                          # first time"
+          echo "  (cd orbit && pnpm dev)                              # vite, proxies /v1 → \$VITE_API_TARGET"
+          echo "  (cd orbit && pnpm build && pnpm preview)            # production bundle"
           echo
           echo "Tail a backgrounded build:   nix log <drv-path>"
           echo "Watch progress without tail: pass -L and DO NOT pipe through tail/grep."

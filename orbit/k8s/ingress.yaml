@@ -1,0 +1,51 @@
+# Same-domain ingress: orbit at /, admin API at /v1.
+# Browser cookies set by authentik on this host are sent to both paths
+# automatically, so the SPA's `fetch('/v1/...', { credentials: 'include' })`
+# carries the auth — no token handling in the frontend.
+#
+# Auth is enforced at the ingress via authentik forward-auth. The admin
+# service is also configured with `LAGRANGE_TRUSTED_SSO_PEER` so it accepts
+# `X-Authentik-Username` from this ingress (see admin-service auth.rs).
+#
+# Tune the host and annotations to match your cluster (this file is a
+# template — fill in REPLACE_WITH_*).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: orbit
+  namespace: lagrange
+  annotations:
+    nginx.ingress.kubernetes.io/auth-url: "https://auth.REPLACE_WITH_DOMAIN/outpost.goauthentik.io/auth/nginx"
+    nginx.ingress.kubernetes.io/auth-signin: "https://auth.REPLACE_WITH_DOMAIN/outpost.goauthentik.io/start?rd=$escaped_request_uri"
+    nginx.ingress.kubernetes.io/auth-response-headers: "Set-Cookie,X-Authentik-Username,X-Authentik-Groups,X-Authentik-Email,X-Authentik-Name,X-Authentik-Uid"
+    nginx.ingress.kubernetes.io/auth-snippet: |
+      proxy_set_header X-Forwarded-Host $http_host;
+    # Allow the 80 KB claude.json paste through.
+    nginx.ingress.kubernetes.io/proxy-body-size: "8m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - orbit.REPLACE_WITH_DOMAIN
+      secretName: orbit-tls
+  rules:
+    - host: orbit.REPLACE_WITH_DOMAIN
+      http:
+        paths:
+          # API → admin-service. Mounted on /v1 so the frontend's
+          # relative fetches just work.
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: lagrange-admin     # REPLACE_WITH_ADMIN_SERVICE
+                port:
+                  number: 8080
+          # SPA shell + assets
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: orbit
+                port:
+                  number: 80
