@@ -77,6 +77,13 @@ in
     settings = {
       interface = cacheBridgeIfname;
       bind-interfaces = true;
+      # We need dnsmasq to do TWO things for VMs on the bridge: (1) answer
+      # cache.internal locally, (2) forward everything else (github.com,
+      # registry-1.docker.io, …) so VM workloads can reach the outside.
+      # `no-resolv` would prevent (2). Set explicit upstream servers so we
+      # don't depend on what's in /etc/resolv.conf at the moment dnsmasq
+      # starts.
+      server = [ "1.1.1.1" "8.8.8.8" ];
       no-resolv = true;
       port = 53;
       address = [ "/cache.internal/${cacheBridgeAddr}" ];
