@@ -2,7 +2,7 @@ use crate::auth::{require_auth, AuthCfg};
 use crate::agent_claude_md;
 use crate::capacity;
 use crate::credentials;
-use crate::db::{self, VmStatus};
+use crate::db;
 use crate::error::{ApiError, ApiResult};
 use crate::github_accounts;
 use crate::github_repos;
@@ -304,7 +304,15 @@ async fn create_repo(
     }
 
     if let Err(e) = vm::microvm_create_and_start(&s.settings, &body.name).await {
-        let _ = db::set_status(&s.db, &body.name, VmStatus::Failed).await;
+        // Full rollback rather than leaving a Failed row: any /var/lib/microvms/<name>
+        // dir that microvm -c managed to create blocks the next attempt
+        // with the same name (microvm -c refuses to overwrite, error
+        // text on stdout, easy to miss). The Failed row also doesn't
+        // give the operator anything actionable — they'd just have to
+        // destroy it before retrying. Roll all the way back instead.
+        let _ = vm::microvm_destroy(&s.settings, &body.name).await;
+        let _ = db::release_ip(&s.db, &body.name, &ip).await;
+        let _ = db::delete_vm(&s.db, &body.name).await;
         return Err(e);
     }
     db::mark_started(&s.db, &body.name).await?;
@@ -438,7 +446,7 @@ async fn destroy_repo(
         .await?
         .ok_or_else(|| ApiError::NotFound(name.clone()))?;
 
-    if let Err(e) = vm::microvm_destroy(&name).await {
+    if let Err(e) = vm::microvm_destroy(&s.settings, &name).await {
         tracing::warn!(vm = %name, error = %e, "microvm_destroy failed; continuing teardown");
     }
     if q.wipe_persistent {

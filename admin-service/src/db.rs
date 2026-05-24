@@ -221,6 +221,13 @@ pub async fn mark_stopped(pool: &SqlitePool, name: &str) -> ApiResult<()> {
     Ok(())
 }
 
+/// Manually set a VM's recorded status. Currently unused: the
+/// create/start/stop/destroy paths use `mark_started`/`mark_stopped`,
+/// and create's failure path rolls the row back entirely rather than
+/// leaving a `Failed`. Kept around (with #[allow(dead_code)]) because
+/// the `Failed` status code is still a valid value of the CHECK
+/// constraint and a future "soft-fail" mode would want this back.
+#[allow(dead_code)]
 pub async fn set_status(pool: &SqlitePool, name: &str, status: VmStatus) -> ApiResult<()> {
     sqlx::query("UPDATE repo_vms SET status = ?1 WHERE name = ?2")
         .bind(status.as_str())

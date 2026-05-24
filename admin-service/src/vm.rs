@@ -314,12 +314,49 @@ pub async fn microvm_status(name: &str) -> ApiResult<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-pub async fn microvm_destroy(name: &str) -> ApiResult<()> {
+pub async fn microvm_destroy(settings: &Settings, name: &str) -> ApiResult<()> {
     let _ = microvm_stop(name).await;
     // No `systemctl disable` — see comment in microvm_create_and_start.
     // microvm -d removes the per-VM dir; without an enable symlink there's
     // nothing for systemd to garbage-collect.
-    run_cmd("microvm", &["-d", name]).await
+    //
+    // We capture but don't propagate `microvm -d`'s exit code yet — the
+    // empirical failure mode is: a half-built /var/lib/microvms/<name>
+    // (from a create that didn't reach systemctl start) leaves no
+    // unit registered, `microvm -d` errors, and the dir is then
+    // orphaned. The next `microvm -c <name>` refuses to overwrite it
+    // and the operator is stuck.
+    //
+    // Fall back to a direct rm -rf of the per-VM dir. The lagrange-admin
+    // service has CAP_DAC_OVERRIDE bounded to its ReadWritePaths so it
+    // can unlink the root-owned virtiofsd sockets / pidfiles left
+    // behind by past runs.
+    let cli_result = run_cmd("microvm", &["-d", name]).await;
+
+    let dir = settings.microvm_dir.join(name);
+    if dir.exists() {
+        if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
+            tracing::error!(
+                vm = %name,
+                dir = %dir.display(),
+                error = %e,
+                "microvm_destroy: fallback rm -rf failed; manual cleanup required"
+            );
+            return Err(ApiError::Io(e));
+        } else if cli_result.is_err() {
+            tracing::warn!(
+                vm = %name,
+                dir = %dir.display(),
+                "microvm_destroy: `microvm -d` errored but fallback rm -rf succeeded"
+            );
+        }
+    }
+
+    // `microvm -d`'s exit code is now informational — if rm cleaned up
+    // we're effectively destroyed. Swallow the CLI error so the
+    // happy-path caller (destroy_repo in api.rs) doesn't log a noisy
+    // warning when the recovery worked.
+    Ok(())
 }
 
 pub async fn vm_journal_tail(name: &str, lines: u32) -> ApiResult<String> {
