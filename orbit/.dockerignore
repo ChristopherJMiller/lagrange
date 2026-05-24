@@ -8,6 +8,8 @@ dist
 .env.*.local
 .git
 k8s
-Dockerfile
 .dockerignore
-nginx.conf
+# NOTE: do NOT exclude nginx.conf — the Dockerfile COPYs it into the
+# runtime image. Same with the Dockerfile itself (harmless if shipped
+# but conventionally excluded; we keep it in to avoid surprising the
+# next person who adds a multi-stage step that needs it).
