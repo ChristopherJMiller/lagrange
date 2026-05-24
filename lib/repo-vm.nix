@@ -188,7 +188,13 @@ nixpkgs.lib.nixosSystem {
         "d /persistent/statsig  0755 agent users -"
         "d /persistent/ssh      0700 agent users -"
         "d /persistent/work     0755 agent users -"
-        "f /persistent/gitconfig 0644 agent users -"
+        # gitconfig lives in its own agent-owned dir, not at /persistent/
+        # root. `git config --global` creates a `.lock` file in the SAME
+        # DIRECTORY as the config target — /persistent/ itself is owned
+        # by lagrange-admin on the host so agent inside the guest can't
+        # mkfile there. Inside a subdir owned by agent it works fine.
+        "d /persistent/git      0755 agent users -"
+        "f /persistent/git/config 0644 agent users -"
         # Bind-mount sources for Claude credentials. The host admin
         # service writes real contents when credentials are POSTed; until
         # then these stay as empty placeholders.
@@ -277,11 +283,14 @@ nixpkgs.lib.nixosSystem {
           Environment = [
             "HOME=/home/agent"
             "TERM=screen-256color"
-            # Persist git config to /persistent/gitconfig directly
-            # instead of bind-mounting ~/.gitconfig (which breaks the
-            # atomic-rename `git config --global` uses, including the
-            # `git config --global ...` call inside `gh auth setup-git`).
-            "GIT_CONFIG_GLOBAL=/persistent/gitconfig"
+            # Persist git config to /persistent/git/config directly
+            # instead of bind-mounting ~/.gitconfig (which broke the
+            # atomic-rename `git config --global` uses) — and inside its
+            # own subdir because git creates `<config>.lock` in the same
+            # dir, and /persistent/ root is lagrange-admin-owned (so the
+            # agent user can't make files there). The subdir is
+            # agent:users 0755 via the tmpfiles rule above.
+            "GIT_CONFIG_GLOBAL=/persistent/git/config"
           ];
           # Optional env files staged by the admin service. Leading `-`
           # makes each file optional so VMs whose corresponding host-side
