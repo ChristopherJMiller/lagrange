@@ -209,9 +209,13 @@ nixpkgs.lib.nixosSystem {
       '';
 
       ###### claude remote-control session
-      # `claude remote-control` currently wants a PTY; wrap in tmux.
-      # Single-session mode (--spawn session), NOT worktree. Worktrees are
-      # the agent's choice as a subagent fan-out, not a session multiplexer.
+      # `claude remote-control` requires a controlling TTY. systemd's
+      # Type=simple doesn't allocate one — we used to wrap in tmux, but
+      # tmux itself fails with "open terminal failed: not a terminal" when
+      # invoked without a tty. Use `script -qc` instead: it creates a
+      # ptmx/pts pair and runs claude inside it. systemd's main process
+      # is now `script`, which stays around for the lifetime of claude.
+      # Single-session mode (--spawn session), NOT worktree.
       systemd.services.claude-remote = {
         description = "Claude Code remote control session for ${repoArgs.name}";
         after = [ "network-online.target" "home-agent-work.mount" ];
@@ -239,8 +243,9 @@ nixpkgs.lib.nixosSystem {
               GIT_SSH_COMMAND="ssh -i /home/agent/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new" \
                 ${pkgs.git}/bin/git clone --branch ${repoArgs.branch} ${repoArgs.repoUrl} .
             fi
-            exec ${pkgs.tmux}/bin/tmux -L claude new-session -A -s claude \
-              "${pkgs.claude-code}/bin/claude remote-control --name ${repoArgs.name} --spawn session"
+            exec ${pkgs.util-linux}/bin/script -qc \
+              "${pkgs.claude-code}/bin/claude remote-control --name ${repoArgs.name} --spawn session" \
+              /dev/null
           '';
           Restart = "on-failure";
           RestartSec = 30;
