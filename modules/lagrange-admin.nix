@@ -306,6 +306,14 @@ in
       "d ${cfg.stateDir}/deploy-keys      0700 lagrange-admin lagrange-admin -"
       "d ${cfg.stateDir}/vm-flakes        0750 lagrange-admin lagrange-admin -"
       "d ${cfg.agentStateRoot}            0750 lagrange-admin lagrange-admin -"
+      # Defensive create for agentSharedDir. modules/shared-agent-state.nix
+      # also creates this (with a CLAUDE.md seeder), but the admin smoke
+      # test doesn't load that module — without our own `d` rule the
+      # systemd ReadWritePaths step refuses to set up the mount namespace
+      # and the service exits 226/NAMESPACE before main() ever runs.
+      # Group-writable by lagrange-admin so the service can atomic-rename
+      # CLAUDE.md.tmp inside it.
+      "d ${cfg.agentSharedDir}            0755 root           lagrange-admin -"
       # root:kvm 0775 — kvm group is standard in NixOS (smoke test has it)
       # and both microvm.service (microvm user, in kvm) and lagrange-admin
       # (also in kvm) can write. `d` creates if absent (smoke test where
