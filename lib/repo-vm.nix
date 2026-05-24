@@ -95,6 +95,11 @@ nixpkgs.lib.nixosSystem {
       };
 
       ###### Guest networking
+      # systemd's predictable-interface naming gives cloud-hypervisor's
+      # virtio-net device a name like `enp0s4`, but our networking.interfaces
+      # config targets `eth0`. Force legacy naming so the names line up.
+      boot.kernelParams = [ "net.ifnames=0" ];
+
       networking = {
         hostName = repoArgs.name;
         useDHCP = false;
