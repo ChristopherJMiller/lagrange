@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { VmDto } from '../api/types'
 import { api } from '../api/client'
 import { refreshNow } from '../api/hooks'
@@ -65,6 +65,92 @@ function lookup(vm: VmDto): StatusLook {
   }
 }
 
+/**
+ * Replaces the Drive Agent button while we're waiting for the guest's
+ * claude-session-publisher to scrape the session URL from the
+ * `claude remote-control` typescript and POST it back. Shows elapsed
+ * time since the VM was last started so the operator can tell normal
+ * startup chatter (10s) from "this is stuck" (5+ minutes).
+ */
+function AwaitingSession({ vm }: { vm: VmDto }) {
+  const openLogs = useUi((s) => s.openLogs)
+  const [, force] = useState(0)
+  useEffect(() => {
+    const id = window.setInterval(() => force((x) => x + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  if (!vm.runtime_active) {
+    return (
+      <div className="flex items-center justify-between border border-border bg-surface-2/40 px-3.5 py-2.5">
+        <div className="flex items-center gap-2">
+          <span className="text-dimmer">◌</span>
+          <span className="text-[11px] uppercase tracking-widest text-dim">
+            Vessel Stopped
+          </span>
+        </div>
+        <span className="text-[10px] uppercase tracking-widest text-dimmer">
+          start to register
+        </span>
+      </div>
+    )
+  }
+
+  const startedMs = vm.last_started_at ? Date.parse(vm.last_started_at) : NaN
+  const elapsedSec = Number.isFinite(startedMs)
+    ? Math.max(0, Math.floor((Date.now() - startedMs) / 1000))
+    : null
+  const elapsedLabel = elapsedSec == null ? '' : `${elapsedSec}s`
+  // Heuristic for "this is taking too long" — guest typically registers
+  // within ~30s on a warm host. After 3 min the publisher's start-limit
+  // has likely fired and Logs is the next step.
+  const slow = (elapsedSec ?? 0) > 180
+
+  return (
+    <button
+      type="button"
+      onClick={() => openLogs(vm)}
+      className={cn(
+        'group relative flex w-full items-center justify-between border px-3.5 py-2.5 text-left',
+        'transition-colors duration-150',
+        slow
+          ? 'border-amber/40 bg-amber/[0.04] hover:border-amber'
+          : 'border-border bg-surface-2/40 hover:border-border-bright',
+      )}
+      title="Click to view vessel logs"
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={cn(
+            'inline-block h-2 w-2 rounded-full animate-pulse-soft',
+            slow ? 'bg-amber' : 'bg-cyan',
+          )}
+        />
+        <div className="flex flex-col">
+          <span
+            className={cn(
+              'text-[11px] uppercase tracking-widest',
+              slow ? 'text-amber' : 'text-text',
+            )}
+          >
+            Awaiting Session
+          </span>
+          <span className="text-[10px] text-dim leading-tight">
+            {slow
+              ? 'still waiting · check logs for claude-remote errors'
+              : 'guest is registering with claude.ai/code'}
+          </span>
+        </div>
+      </div>
+      {elapsedLabel && (
+        <span className="text-[10px] uppercase tracking-widest text-dimmer tabular-nums">
+          {elapsedLabel}
+        </span>
+      )}
+    </button>
+  )
+}
+
 function shortRepo(url: string): string {
   // git@github.com:foo/bar.git → foo/bar
   // https://github.com/foo/bar(.git) → foo/bar
@@ -81,7 +167,6 @@ export function VesselCard({ vm }: { vm: VmDto }) {
   const toast = useUi((s) => s.toast)
 
   const look = useMemo(() => lookup(vm), [vm])
-  const hasSession = !!vm.claude_session_name && vm.runtime_active
   const hasDeepLink = !!vm.claude_session_url
 
   async function action(kind: 'start' | 'stop' | 'restart', label: string) {
@@ -100,23 +185,10 @@ export function VesselCard({ vm }: { vm: VmDto }) {
   }
 
   function openDrive() {
-    // Deep link wins: the admin service publishes it as soon as the
-    // guest's claude-session-publisher scrapes the typescript.
-    if (vm.claude_session_url) {
-      window.open(vm.claude_session_url, '_blank', 'noopener,noreferrer')
-      return
-    }
-    // Fallback while the URL is still pending: copy the session name so
-    // the operator can fuzzy-find it in the claude.ai/code sidebar.
-    if (vm.claude_session_name) {
-      try {
-        navigator.clipboard.writeText(vm.claude_session_name)
-        toast('info', `session "${vm.claude_session_name}" copied — find it in claude.ai/code`)
-      } catch {
-        toast('info', `find session "${vm.claude_session_name}" in claude.ai/code`)
-      }
-    }
-    window.open('https://claude.ai/code', '_blank', 'noopener,noreferrer')
+    // Only ever called when claude_session_url is present (button
+    // doesn't render otherwise).
+    if (!vm.claude_session_url) return
+    window.open(vm.claude_session_url, '_blank', 'noopener,noreferrer')
   }
 
   return (
@@ -184,7 +256,9 @@ export function VesselCard({ vm }: { vm: VmDto }) {
         <DataRow
           label="SESSION"
           value={
-            vm.claude_session_name ? (
+            vm.claude_session_url ? (
+              <span className="text-cyan">registered</span>
+            ) : vm.claude_session_name ? (
               <span className="text-cyan">{vm.claude_session_name}</span>
             ) : (
               <span className="text-dimmer">— pending —</span>
@@ -220,32 +294,23 @@ export function VesselCard({ vm }: { vm: VmDto }) {
 
       {/* actions */}
       <div className="space-y-2 px-4 py-3">
-        <Button
-          variant="hero"
-          size="md"
-          className="w-full justify-between"
-          disabled={!hasSession && !vm.runtime_active && !hasDeepLink}
-          onClick={openDrive}
-          title={
-            hasDeepLink
-              ? `Open session at ${vm.claude_session_url}`
-              : hasSession
-                ? `Open claude.ai/code (copies "${vm.claude_session_name}" to clipboard)`
-                : 'Open claude.ai/code'
-          }
-        >
-          <span className="flex items-center gap-2">
-            <span className="text-amber/60">{hasDeepLink ? '◉' : '▸'}</span>
-            <span>
-              {hasDeepLink
-                ? 'Drive Agent'
-                : hasSession
-                  ? 'Drive Agent'
-                  : 'Open claude.ai'}
+        {hasDeepLink ? (
+          <Button
+            variant="hero"
+            size="md"
+            className="w-full justify-between"
+            onClick={openDrive}
+            title={`Open session at ${vm.claude_session_url}`}
+          >
+            <span className="flex items-center gap-2">
+              <span className="text-amber/60">◉</span>
+              <span>Drive Agent</span>
             </span>
-          </span>
-          <span className="text-amber/70 transition-transform group-hover:translate-x-0.5">⤴</span>
-        </Button>
+            <span className="text-amber/70 transition-transform group-hover:translate-x-0.5">⤴</span>
+          </Button>
+        ) : (
+          <AwaitingSession vm={vm} />
+        )}
 
         <div className="flex flex-wrap items-center gap-1.5">
           {vm.runtime_active ? (

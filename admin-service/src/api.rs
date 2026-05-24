@@ -346,6 +346,11 @@ struct VmDto {
     claude_session_url: Option<String>,
     permission_mode: String,
     github_account: Option<String>,
+    /// Last time the operator pressed start (or create) — RFC 3339.
+    /// Surfaced so the orbit UI can show "awaiting registration · 42s"
+    /// while the guest's claude-session-publisher is still polling
+    /// the typescript for a session URL.
+    last_started_at: Option<String>,
 }
 
 impl VmDto {
@@ -363,6 +368,7 @@ impl VmDto {
             claude_session_url: r.claude_session_url,
             permission_mode: r.permission_mode,
             github_account: r.github_account,
+            last_started_at: r.last_started_at.map(|t| t.to_rfc3339()),
         }
     }
 }

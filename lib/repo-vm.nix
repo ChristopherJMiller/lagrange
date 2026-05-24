@@ -255,6 +255,15 @@ nixpkgs.lib.nixosSystem {
         after = [ "network-online.target" "home-agent-work.mount" ];
         wants = [ "network-online.target" ];
         wantedBy = [ "multi-user.target" ];
+        # `gh auth setup-git` shells out to `git` via PATH (it doesn't
+        # honor an explicit --git-path or similar). Systemd's default
+        # PATH for services is minimal — without this the start script
+        # fails with "unable to find git executable in PATH", crashloops,
+        # and bindsTo on claude-session-publisher drags that down too.
+        # Listing the tools the start script reaches for through PATH
+        # rather than $store/bin: git, gh, openssh (for the SSH-key
+        # fallback's clone), claude-code (for the exec).
+        path = with pkgs; [ git gh openssh claude-code ];
         serviceConfig = {
           Type = "simple";
           User = "agent";

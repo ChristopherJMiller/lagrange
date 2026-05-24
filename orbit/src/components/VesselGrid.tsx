@@ -46,13 +46,20 @@ export function VesselGrid() {
             <div
               key={vm.name}
               style={{ animationDelay: `${Math.min(i * 30, 240)}ms` }}
-              className="animate-slide-up"
+              className="animate-slide-up flex h-full"
             >
-              <VesselCard vm={vm} />
+              <div className="w-full">
+                <VesselCard vm={vm} />
+              </div>
             </div>
           ))}
-          <div style={{ animationDelay: `${Math.min((vms?.length || 0) * 30, 240)}ms` }} className="animate-slide-up">
-            <DeployTile />
+          <div
+            style={{ animationDelay: `${Math.min((vms?.length || 0) * 30, 240)}ms` }}
+            className="animate-slide-up flex h-full"
+          >
+            <div className="w-full">
+              <DeployTile />
+            </div>
           </div>
         </div>
       )}

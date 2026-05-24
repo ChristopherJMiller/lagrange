@@ -13,6 +13,7 @@ export type VmDto = {
   claude_session_url: string | null
   permission_mode: PermissionMode
   github_account: string | null
+  last_started_at: string | null
 }
 
 export type GithubAccount = {

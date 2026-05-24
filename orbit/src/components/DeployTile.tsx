@@ -10,7 +10,7 @@ export function DeployTile() {
   return (
     <button
       onClick={openDeploy}
-      className="group relative flex min-h-[280px] flex-col items-center justify-center gap-3 border border-dashed border-border hover:border-cyan hover:bg-cyan/[0.03] transition-colors"
+      className="group relative flex h-full min-h-[280px] flex-col items-center justify-center gap-3 border border-dashed border-border hover:border-cyan hover:bg-cyan/[0.03] transition-colors"
     >
       <div className="hatch absolute inset-0 opacity-40 group-hover:opacity-100 transition-opacity" />
       <svg width="56" height="56" viewBox="0 0 56 56" className="relative text-dim group-hover:text-cyan transition-colors">
