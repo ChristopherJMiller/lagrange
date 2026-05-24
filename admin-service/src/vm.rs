@@ -398,10 +398,32 @@ pub async fn reconcile_autostart(pool: &sqlx::SqlitePool, settings: &Settings) {
     tracing::info!(started, skipped, "autostart reconcile complete");
 }
 
+/// Tail of a byte buffer interpreted as UTF-8, capped to ~`max` chars.
+/// `nix` errors land at the END of the build log, but the log can be
+/// hundreds of KB — without a tail we either drown the operator in
+/// progress noise or (worse) overflow the API response body.
+fn tail_lossy(bytes: &[u8], max: usize) -> String {
+    let s = String::from_utf8_lossy(bytes);
+    let trimmed = s.trim_end();
+    if trimmed.chars().count() <= max {
+        return trimmed.to_string();
+    }
+    // Take the last `max` chars (not bytes — UTF-8 safe).
+    let start = trimmed.chars().count().saturating_sub(max);
+    let suffix: String = trimmed.chars().skip(start).collect();
+    format!("…{}", suffix)
+}
+
 /// Run a privileged-on-host command directly. systemctl actions on
 /// microvm@*.service are gated by a polkit rule that allows the microvm
 /// group; `microvm -c/-d` only needs group write on /var/lib/microvms. No
 /// setuid involved — NoNewPrivileges stays on.
+///
+/// Errors include the tail of BOTH stdout and stderr because `nix`
+/// (which `microvm -c` invokes) sometimes routes the real failure
+/// message to stdout while leaving progress chatter on stderr — the
+/// previous stderr-only error reporter left operators staring at a
+/// build-progress line that looked successful but exited 1.
 async fn run_cmd(cmd: &str, args: &[&str]) -> ApiResult<()> {
     let out = Command::new(cmd)
         .args(args)
@@ -409,12 +431,29 @@ async fn run_cmd(cmd: &str, args: &[&str]) -> ApiResult<()> {
         .await
         .map_err(|e| ApiError::Subprocess(format!("spawn {cmd}: {e}")))?;
     if !out.status.success() {
+        let code = out.status.code().unwrap_or(-1);
+        let stderr_tail = tail_lossy(&out.stderr, 2000);
+        let stdout_tail = tail_lossy(&out.stdout, 2000);
+        // Log the full output server-side for journalctl forensics; the
+        // API response gets the trimmed tails.
+        tracing::error!(
+            cmd = cmd,
+            args = ?args,
+            exit = code,
+            stderr_len = out.stderr.len(),
+            stdout_len = out.stdout.len(),
+            stderr = %String::from_utf8_lossy(&out.stderr),
+            stdout = %String::from_utf8_lossy(&out.stdout),
+            "subprocess failed"
+        );
+        let detail = if stdout_tail.is_empty() {
+            format!("stderr: {stderr_tail}")
+        } else {
+            format!("stderr: {stderr_tail}\n\nstdout: {stdout_tail}")
+        };
         return Err(ApiError::Subprocess(format!(
-            "{} {:?} exit {}: {}",
-            cmd,
-            args,
-            out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stderr).trim()
+            "{} {:?} exit {}:\n{}",
+            cmd, args, code, detail
         )));
     }
     Ok(())
