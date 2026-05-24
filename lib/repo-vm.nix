@@ -22,7 +22,11 @@
 , vcpu ? 4
 , memMb ? 4096
 , balloonMb ? null
-, operatorSshKey ? null
+  # Default to the operator's published key so freshly-created VMs are
+  # debuggable over SSH (port 22 on the VM's bridge IP, 10.42.0.X) without
+  # the admin service having to thread an SSH key through. Override per-VM
+  # by passing `operatorSshKey = null` to disable, or another key to swap.
+, operatorSshKey ? "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHR4q3amhKDhCF6+xa3oTXJX2ycN503+cEo/gpnOkFt git@chrismiller.xyz"
 }:
 
 nixpkgs.lib.nixosSystem {
