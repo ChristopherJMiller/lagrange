@@ -216,6 +216,13 @@ in
           # subtree (not /nix/store, which we still want immutable).
           "/nix/var/nix/gcroots"
         ];
+        # Per-VM persistent volumes accumulate files owned by the guest's
+        # agent UID (which virtiofs preserves into the host as
+        # chris:users), and DELETE /v1/repos?wipe_persistent=true needs to
+        # remove them. Grant CAP_DAC_OVERRIDE so unlink succeeds regardless
+        # of owner. Bounded by ReadWritePaths to lagrange's own state dirs.
+        AmbientCapabilities = [ "CAP_DAC_OVERRIDE" ];
+        CapabilityBoundingSet = [ "CAP_DAC_OVERRIDE" ];
       };
     };
 
