@@ -120,12 +120,11 @@ in
       # kvm:        write /var/lib/microvms (microvm:kvm 0775) for `microvm -c/-d`
       #             and talk to /dev/kvm via the hypervisor
       # systemd-journal: read `journalctl -u microvm@*` without sudo
-      #
-      # microvm.nix's host module only creates the microvm USER (with kvm
-      # as its primary group) and doesn't declare a separate `microvm`
-      # group, so we hang the privilege gate on the existing `kvm` group
-      # — the same one /var/lib/microvms is already owned by.
-      extraGroups = [ "kvm" "systemd-journal" ];
+      # users:      chgrp per-VM agent.env to GID 100 (`users`) so the
+      #             guest agent — whose primary group is `users` — can
+      #             read it at 0640 without it being world-readable.
+      #             virtiofs preserves GIDs, so host GID 100 == guest GID 100.
+      extraGroups = [ "kvm" "systemd-journal" "users" ];
     };
     users.groups.lagrange-admin = { };
 

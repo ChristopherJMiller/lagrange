@@ -151,16 +151,19 @@ pub async fn stage_for_vm(settings: &Settings, name: &str) -> ApiResult<()> {
             .write(true)
             .create(true)
             .truncate(true)
-            .mode(0o644)
+            .mode(0o640)
             .open(&tmp_for_blocking)?;
         f.write_all(body_owned.as_bytes())?;
         f.sync_all()?;
-        // Mode 0644 (not 0600) because the file ends up under /persistent
-        // inside the VM via virtiofs, and host UIDs don't map to guest
-        // UIDs. With 0600 the agent user can't read it. The VM's
-        // /persistent share is per-VM and only the agent runs inside, so
-        // world-readable here is the same blast radius as 0600.
-        std::fs::set_permissions(&tmp_for_blocking, std::fs::Permissions::from_mode(0o644))?;
+        // Per-VM /persistent is mounted via virtiofs with host UIDs/GIDs
+        // preserved. host lagrange-admin (UID 997) has no name inside the
+        // VM (shows as systemd-oom). We chgrp the file to GID 100
+        // (`users` on the host, `users` inside the VM) so the guest's
+        // agent user — whose primary group is `users` — can read it at
+        // 0640 without making it world-readable. The host's lagrange-admin
+        // user is in the `users` group (see modules/lagrange-admin.nix).
+        std::fs::set_permissions(&tmp_for_blocking, std::fs::Permissions::from_mode(0o640))?;
+        std::os::unix::fs::chown(&tmp_for_blocking, None, Some(100))?;
         std::fs::rename(&tmp_for_blocking, &final_for_blocking)?;
         Ok(())
     })
@@ -255,7 +258,7 @@ mod tests {
         let body = std::fs::read_to_string(&env_path).unwrap();
         assert_eq!(body, "CLAUDE_CODE_OAUTH_TOKEN=tok-xyz\n");
         let md = std::fs::metadata(&env_path).unwrap();
-        assert_eq!(md.permissions().mode() & 0o777, 0o644);
+        assert_eq!(md.permissions().mode() & 0o777, 0o640);
     }
 
     #[tokio::test]
