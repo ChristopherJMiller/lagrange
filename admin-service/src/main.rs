@@ -16,6 +16,7 @@ mod error;
 mod github_accounts;
 mod github_repos;
 mod state;
+mod version;
 mod vm;
 
 use auth::AuthCfg;

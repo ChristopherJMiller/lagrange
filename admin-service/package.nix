@@ -1,4 +1,4 @@
-{ lib, rustPlatform, pkg-config, openssl, sqlite }:
+{ lib, rustPlatform, pkg-config, openssl, sqlite, rev ? "unknown" }:
 
 rustPlatform.buildRustPackage {
   pname = "lagrange-admin";
@@ -14,6 +14,14 @@ rustPlatform.buildRustPackage {
 
   nativeBuildInputs = [ pkg-config ];
   buildInputs = [ openssl sqlite ];
+
+  # Surface the source rev to the binary via env → option_env! so
+  # /v1/health can say which commit is actually running on the host.
+  # flake.nix passes self.rev (clean) or self.dirtyRev (uncommitted);
+  # falls through to "unknown" outside a flake context. NOT placed in
+  # `version` above — changing the derivation name on every commit
+  # would defeat caching for unrelated rebuilds.
+  LAGRANGE_REV = rev;
 
   # sqlx::migrate!("./migrations") needs the migrations in the source tree
   # at build time; buildRustPackage already copies the whole src so no

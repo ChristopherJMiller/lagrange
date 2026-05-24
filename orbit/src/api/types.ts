@@ -50,10 +50,17 @@ export type CredStatus = {
   set_at: string | null
 }
 
+export type VersionInfo = {
+  rev: string
+  short: string
+  dirty: boolean
+}
+
 export type HealthDto = {
   status: string
   vms_running: number
   vms_total: number
+  version: VersionInfo
 }
 
 export type CreateVmReq = {

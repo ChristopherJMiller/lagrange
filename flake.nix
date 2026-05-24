@@ -97,7 +97,13 @@
       };
 
       packages.${system} = {
-        lagrange-admin = pkgsFor.callPackage ./admin-service/package.nix { };
+        lagrange-admin = pkgsFor.callPackage ./admin-service/package.nix {
+          # self.rev is set when this flake input is a clean git commit;
+          # self.dirtyRev gets a `-dirty` suffix when something is uncommitted;
+          # both are absent when the source tree isn't a git repo at all
+          # (`nix build` from a tarball). Walk down the cascade.
+          rev = self.rev or self.dirtyRev or "unknown";
+        };
         default = self.packages.${system}.lagrange-admin;
         installer-iso = self.nixosConfigurations.installer.config.system.build.isoImage;
       };

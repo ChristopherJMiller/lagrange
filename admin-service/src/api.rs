@@ -7,6 +7,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::github_accounts;
 use crate::github_repos;
 use crate::state::AppState;
+use crate::version;
 use crate::vm;
 use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
@@ -78,6 +79,7 @@ struct Health {
     status: &'static str,
     vms_running: u32,
     vms_total: u32,
+    version: version::VersionInfo,
 }
 
 async fn system_capacity(State(s): State<AppState>) -> ApiResult<Json<capacity::Capacity>> {
@@ -128,6 +130,7 @@ async fn health(State(s): State<AppState>) -> ApiResult<Json<Health>> {
         status: "ok",
         vms_running: running,
         vms_total: total,
+        version: version::info(),
     }))
 }
 
