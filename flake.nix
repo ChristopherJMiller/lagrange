@@ -134,6 +134,16 @@
           inherit self nixpkgs;
           pkgs = pkgsFor;
         };
+
+        # Boots a NixOS VM with the same lib/repo-vm-guest.nix module
+        # the real mkRepoVm composes, and asserts claude-remote stays
+        # active + insteadOf is set correctly + publisher posts the
+        # session URL. Catches the class of bugs that previously
+        # required round-tripping to the satellite.
+        repo-vm-boot = import ./tests/repo-vm-boot.nix {
+          inherit self nixpkgs claude-code;
+          pkgs = pkgsFor;
+        };
       };
 
       devShells.${system}.default = pkgsFor.mkShell {
