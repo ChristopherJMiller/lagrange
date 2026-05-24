@@ -109,6 +109,23 @@ in
         do this so they can run against 127.0.0.1).
       '';
     };
+
+    internalBindAddress = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "10.42.0.1";
+      description = ''
+        Bind address for the **internal** API surface (currently only the
+        guest → host session-url callback). Reachable from the VM subnet
+        only. Auth on this listener is source-IP-based against the vm_ip
+        column, not bearer. Defaults to the cache-bridge gateway. Set to
+        null to disable (tests use this).
+      '';
+    };
+
+    internalBindPort = lib.mkOption {
+      type = lib.types.port;
+      default = 8444;
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -184,6 +201,8 @@ in
         LAGRANGE_DEPLOY_KEYS_TAR = toString cfg.deployKeysTarFile;
       } // lib.optionalAttrs (cfg.trustedSsoPeer != null) {
         LAGRANGE_TRUSTED_SSO_PEER = cfg.trustedSsoPeer;
+      } // lib.optionalAttrs (cfg.internalBindAddress != null) {
+        LAGRANGE_INTERNAL_BIND = "${cfg.internalBindAddress}:${toString cfg.internalBindPort}";
       };
 
       serviceConfig = {
@@ -250,5 +269,12 @@ in
       # in both production and the smoke test (microvm user may not exist).
       "d /nix/var/nix/gcroots/microvm     0775 root           kvm            -"
     ];
+
+    # Open the internal listener to the VM subnet only. The bind address is
+    # already on the cache bridge, but networking.firewall.allowedTCPPorts
+    # is a global allow — scope it with an interface match. cachebr0 is
+    # what the VM taps slave to; traffic from VMs arrives via that bridge.
+    networking.firewall.interfaces.cachebr0.allowedTCPPorts =
+      lib.optional (cfg.internalBindAddress != null) cfg.internalBindPort;
   };
 }

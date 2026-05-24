@@ -309,6 +309,83 @@ nixpkgs.lib.nixosSystem {
         settings.PasswordAuthentication = false;
       };
 
+      ###### claude-session-publisher
+      # On boot, watch the `claude remote-control` typescript for the
+      # session URL that the CLI prints on registration (a claude.ai link
+      # the operator drives the agent from), and POST it to the admin
+      # service's internal endpoint on the cache-bridge gateway.
+      #
+      # The admin service identifies us by source IP against the vm_ip
+      # column — no token needed. Once a URL is published, the unit
+      # exits successfully and stays out of the way.
+      #
+      # The typescript is full of terminal escapes; `strings` strips
+      # non-printable bytes so the URL falls out cleanly. The regex is
+      # deliberately broad (any https://claude.ai/... URL) because the
+      # exact session-URL format from `claude remote-control` isn't
+      # stable across releases — we just want the first one we see.
+      systemd.services.claude-session-publisher = {
+        description = "Publish claude remote-control session URL to admin";
+        after = [ "claude-remote.service" ];
+        bindsTo = [ "claude-remote.service" ];
+        wantedBy = [ "multi-user.target" ];
+        path = with pkgs; [ coreutils binutils curl gnugrep gawk ];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          # Give the agent a moment to register the session before we
+          # start tailing the typescript.
+          ExecStart = pkgs.writeShellScript "claude-session-publisher" ''
+            set -euo pipefail
+            TYPESCRIPT=/tmp/claude-remote.typescript
+            ADMIN_URL="http://10.42.0.1:8444/v1/internal/session-url"
+
+            # Wait up to ~5 minutes for the file to appear and grow.
+            for _ in $(seq 1 60); do
+              [ -s "$TYPESCRIPT" ] && break
+              sleep 5
+            done
+
+            # Poll the typescript for a claude.ai URL. The session
+            # registration line shows up within seconds of `claude
+            # remote-control` printing its banner; if it hasn't after
+            # ~5 minutes, something is wrong and we exit nonzero so the
+            # journal records the failure.
+            URL=""
+            for _ in $(seq 1 60); do
+              if [ -s "$TYPESCRIPT" ]; then
+                URL="$(${pkgs.binutils}/bin/strings "$TYPESCRIPT" \
+                  | ${pkgs.gnugrep}/bin/grep -oE 'https://claude\.ai/[A-Za-z0-9./?=&%_~+#-]+' \
+                  | ${pkgs.coreutils}/bin/head -n 1 || true)"
+              fi
+              if [ -n "$URL" ]; then break; fi
+              sleep 5
+            done
+
+            if [ -z "$URL" ]; then
+              echo "no claude.ai session URL found in $TYPESCRIPT after 5min" >&2
+              exit 1
+            fi
+
+            echo "publishing session URL: $URL"
+            # 5s connect timeout, 10s total, retry a couple times in case
+            # the admin service is mid-restart.
+            ${pkgs.curl}/bin/curl --fail --silent --show-error \
+              --connect-timeout 5 --max-time 10 \
+              --retry 3 --retry-delay 5 \
+              -H 'Content-Type: application/json' \
+              -d "{\"url\":\"$URL\"}" \
+              "$ADMIN_URL"
+          '';
+          Restart = "on-failure";
+          RestartSec = 30;
+          # If the URL never gets posted (e.g. typescript empty), we don't
+          # want the unit retrying forever and spamming the journal.
+          StartLimitBurst = 3;
+          StartLimitIntervalSec = 600;
+        };
+      };
+
       ###### Resource accounting — give a second OOM fence inside the VM.
       systemd.slices."claude.slice".sliceConfig = {
         MemoryHigh = "${toString (repoArgs.memMb * 80 / 100)}M";

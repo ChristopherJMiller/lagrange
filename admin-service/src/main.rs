@@ -77,7 +77,7 @@ async fn run_server(settings: Settings) -> anyhow::Result<()> {
         trusted_sso_peer: settings.trusted_sso_peer,
     });
 
-    let app = api::router(app_state, auth);
+    let app = api::router(app_state.clone(), auth);
 
     let addr: SocketAddr = settings
         .bind
@@ -87,9 +87,32 @@ async fn run_server(settings: Settings) -> anyhow::Result<()> {
     tracing::info!(
         %addr,
         sso_peer = ?settings.trusted_sso_peer,
+        internal_bind = ?settings.internal_bind,
         "lagrange-admin starting"
     );
     let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    // Optional second listener for the **internal** router. Reachable only
+    // from VMs over the cache bridge; identifies callers by source IP.
+    if let Some(internal_addr) = settings.internal_bind.clone() {
+        let internal_sock: SocketAddr = internal_addr
+            .parse()
+            .with_context(|| format!("parse internal bind address {}", internal_addr))?;
+        let internal_app = api::internal_router(app_state);
+        let internal_listener = tokio::net::TcpListener::bind(internal_sock).await?;
+        tracing::info!(addr = %internal_sock, "internal listener up");
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(
+                internal_listener,
+                internal_app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            {
+                tracing::error!(error = %e, "internal listener exited");
+            }
+        });
+    }
+
     // into_make_service_with_connect_info publishes ConnectInfo<SocketAddr>
     // into request extensions; the auth middleware reads the source IP from
     // there to gate the SSO path.

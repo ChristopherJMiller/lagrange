@@ -165,6 +165,7 @@ mod tests {
             ip_pool_cidr: "10.42.0.0/24".into(),
             vm_subnet_gateway: "10.42.0.1".into(),
             trusted_sso_peer: None,
+            internal_bind: None,
         }
     }
 

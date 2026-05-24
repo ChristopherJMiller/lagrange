@@ -20,6 +20,15 @@ pub struct Settings {
     /// `X-authentik-username`. `None` disables SSO auth entirely (default
     /// for tests; production sets it to the cluster wg peer, 10.99.0.1).
     pub trusted_sso_peer: Option<IpAddr>,
+    /// Second bind address for the **internal** API surface (currently just
+    /// the guest → host session-url callback). When set, the admin service
+    /// spawns an additional listener on this address that exposes only the
+    /// `/v1/internal/*` routes, which use source-IP-based identification
+    /// against the vm_ip column instead of bearer auth. Typically the cache
+    /// bridge gateway (10.42.0.1:8444). `None` (default) disables the
+    /// internal listener entirely — tests and isolated dev setups don't
+    /// need it.
+    pub internal_bind: Option<String>,
 }
 
 impl Settings {
@@ -43,6 +52,10 @@ impl Settings {
             .map(|s| s.parse::<IpAddr>())
             .transpose()
             .context("parse LAGRANGE_TRUSTED_SSO_PEER")?;
+        let internal_bind = std::env::var("LAGRANGE_INTERNAL_BIND")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         Ok(Self {
             bind,
@@ -55,6 +68,7 @@ impl Settings {
             ip_pool_cidr,
             vm_subnet_gateway,
             trusted_sso_peer,
+            internal_bind,
         })
     }
 

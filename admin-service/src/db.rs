@@ -21,6 +21,7 @@ pub struct RepoVm {
     pub last_started_at: Option<DateTime<Utc>>,
     pub last_stopped_at: Option<DateTime<Utc>>,
     pub claude_session_name: Option<String>,
+    pub claude_session_url: Option<String>,
 }
 
 pub async fn connect_and_migrate(path: &Path) -> anyhow::Result<SqlitePool> {
@@ -255,6 +256,33 @@ pub async fn delete_vm(pool: &SqlitePool, name: &str) -> ApiResult<()> {
     Ok(())
 }
 
+/// Update the operator-facing deep link for `name`. Returns true if a row
+/// was actually updated (i.e., the VM exists), false if no such VM.
+pub async fn set_claude_session_url(
+    pool: &SqlitePool,
+    name: &str,
+    url: &str,
+) -> ApiResult<bool> {
+    let affected = sqlx::query("UPDATE repo_vms SET claude_session_url = ?1 WHERE name = ?2")
+        .bind(url)
+        .bind(name)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    Ok(affected > 0)
+}
+
+/// Lookup `name` for the VM whose vm_ip matches `ip`. Used by the
+/// internal-bridge endpoint to identify the caller from its source address
+/// (each VM has a unique vm_ip in the pool).
+pub async fn vm_name_by_ip(pool: &SqlitePool, ip: &str) -> ApiResult<Option<String>> {
+    let row = sqlx::query("SELECT name FROM repo_vms WHERE vm_ip = ?1")
+        .bind(ip)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.get::<String, _>("name")))
+}
+
 fn row_to_vm(row: sqlx::sqlite::SqliteRow) -> RepoVm {
     RepoVm {
         id: row.get("id"),
@@ -270,6 +298,7 @@ fn row_to_vm(row: sqlx::sqlite::SqliteRow) -> RepoVm {
         last_started_at: row.try_get::<String, _>("last_started_at").ok().map(parse_dt),
         last_stopped_at: row.try_get::<String, _>("last_stopped_at").ok().map(parse_dt),
         claude_session_name: row.try_get("claude_session_name").ok(),
+        claude_session_url: row.try_get("claude_session_url").ok(),
     }
 }
 

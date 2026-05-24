@@ -6,12 +6,13 @@ use crate::github_token;
 use crate::oauth_token;
 use crate::state::AppState;
 use crate::vm;
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
 use axum::middleware;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
+use std::net::SocketAddr;
 use futures::future::join_all;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -32,6 +33,7 @@ pub fn router(state: AppState, auth: Arc<AuthCfg>) -> Router {
         .route("/v1/repos/:name/stop", post(stop_repo))
         .route("/v1/repos/:name/restart", post(restart_repo))
         .route("/v1/repos/:name/logs", get(repo_logs))
+        .route("/v1/repos/:name/session-url", put(set_session_url_external))
         .route(
             "/v1/auth/claude-oauth-token",
             get(get_claude_oauth_token)
@@ -204,6 +206,7 @@ struct VmDto {
     status: String,
     runtime_active: bool,
     claude_session_name: Option<String>,
+    claude_session_url: Option<String>,
 }
 
 impl VmDto {
@@ -218,6 +221,7 @@ impl VmDto {
             status: r.status,
             runtime_active: active,
             claude_session_name: r.claude_session_name,
+            claude_session_url: r.claude_session_url,
         }
     }
 }
@@ -443,4 +447,75 @@ async fn restage_all_vm_github_tokens(s: &AppState) -> ApiResult<()> {
         github_token::stage_for_vm(&s.settings, &v.name).await?;
     }
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct SetSessionUrlRequest {
+    url: String,
+}
+
+fn validate_session_url(url: &str) -> ApiResult<()> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err(ApiError::BadRequest("url empty".into()));
+    }
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(ApiError::BadRequest("url must be http(s)".into()));
+    }
+    if url.len() > 2048 {
+        return Err(ApiError::BadRequest("url too long".into()));
+    }
+    if url.contains(['\n', '\r', ' ']) {
+        return Err(ApiError::BadRequest("url contains whitespace".into()));
+    }
+    Ok(())
+}
+
+/// Operator-driven override: PUT a deep link onto a known VM.
+async fn set_session_url_external(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<SetSessionUrlRequest>,
+) -> ApiResult<StatusCode> {
+    let url = body.url.trim();
+    validate_session_url(url)?;
+    let updated = db::set_claude_session_url(&s.db, &name, url).await?;
+    if !updated {
+        return Err(ApiError::NotFound(name));
+    }
+    tracing::info!(vm = %name, url = %url, "session-url updated (external)");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Build the **internal** router. Mounted on a second listener that binds
+/// to the cache-bridge gateway and accepts requests from the VM subnet
+/// only. No bearer/SSO; the caller is identified by its source IP, which
+/// must match a vm_ip in the pool. This is the path the guest-side
+/// claude-session-publisher uses to post back the discovered URL.
+pub fn internal_router(state: AppState) -> Router {
+    Router::new()
+        .route("/v1/internal/session-url", post(set_session_url_internal))
+        .with_state(state)
+}
+
+async fn set_session_url_internal(
+    State(s): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(body): Json<SetSessionUrlRequest>,
+) -> ApiResult<StatusCode> {
+    let url = body.url.trim();
+    validate_session_url(url)?;
+
+    let peer_ip = peer.ip().to_string();
+    let name = db::vm_name_by_ip(&s.db, &peer_ip).await?.ok_or_else(|| {
+        tracing::warn!(peer = %peer_ip, "internal session-url callback from unknown IP");
+        ApiError::NotFound(format!("no vm at {}", peer_ip))
+    })?;
+
+    let updated = db::set_claude_session_url(&s.db, &name, url).await?;
+    if !updated {
+        return Err(ApiError::NotFound(name));
+    }
+    tracing::info!(vm = %name, peer = %peer_ip, url = %url, "session-url posted by guest");
+    Ok(StatusCode::NO_CONTENT)
 }
