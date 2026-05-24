@@ -313,10 +313,16 @@ nixpkgs.lib.nixosSystem {
             # operator dropped into /persistent/ssh.
             if [ -n "''${GITHUB_TOKEN:-}" ]; then
               ${pkgs.gh}/bin/gh auth setup-git
-              ${pkgs.git}/bin/git config --global \
-                url.https://github.com/.insteadOf git@github.com:
-              ${pkgs.git}/bin/git config --global \
-                url.https://github.com/.insteadOf ssh://git@github.com/
+              # `git config` without --add OVERWRITES the value, so setting
+              # url.<>.insteadOf twice loses the first one. We need both
+              # rewrites (git@github.com: AND ssh://git@github.com/) to
+              # cover both URL forms the operator might paste. Use
+              # --replace-all once to start clean (idempotent across
+              # service restarts) then --add the rest.
+              ${pkgs.git}/bin/git config --global --replace-all \
+                url.https://github.com/.insteadOf "git@github.com:"
+              ${pkgs.git}/bin/git config --global --add \
+                url.https://github.com/.insteadOf "ssh://git@github.com/"
             fi
 
             # Clone on first run if work/ is empty.
