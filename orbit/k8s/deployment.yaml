@@ -27,6 +27,16 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        # Mounted emptyDirs (/tmp, /var/cache/nginx, /var/run/nginx) start
+        # root-owned, which would prevent the nginx user from creating
+        # /var/cache/nginx/client_temp on first request. fsGroup chgrp's
+        # the volume to gid 101 so nginx can write to it. OnRootMismatch
+        # skips the chgrp once the volume's already correct, so pod
+        # restarts don't re-walk the tree.
+        fsGroup: 101
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -57,8 +67,12 @@ spec:
               mountPath: /tmp
             - name: nginx-cache
               mountPath: /var/cache/nginx
+            # The Dockerfile relocates the PID file from /var/run/nginx.pid
+            # to /var/run/nginx/nginx.pid so this mount can be narrower
+            # than /var/run (which on the upstream image also holds
+            # /var/run/utmp and friends).
             - name: nginx-run
-              mountPath: /var/run
+              mountPath: /var/run/nginx
           readinessProbe:
             httpGet:
               path: /healthz

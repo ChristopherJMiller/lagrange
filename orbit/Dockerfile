@@ -28,11 +28,30 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 COPY --from=build /app/dist /usr/share/nginx/html
 
-EXPOSE 8080
+# Make every writable runtime path owned by the nginx user (uid 101 in
+# the official alpine image). Without this, dropping to USER nginx
+# leaves /var/cache/nginx/* and /var/run unwritable — nginx tries to
+# mkdir client_temp at startup and crashes with EACCES.
+#
+# /var/log/nginx/{access,error}.log are symlinks to /dev/std{out,err}
+# in the upstream image; just chown the directory so a future config
+# that writes to a real file doesn't trip.
+#
+# /tmp is mode 1777 by default; not touched here.
+#
+# Also: rewrite the PID path to a location the nginx user can write.
+# The default /var/run/nginx.pid lives in /run on alpine and is
+# root-owned; nginx as a non-root user can't replace it.
+RUN set -eux; \
+    chown -R nginx:nginx \
+      /usr/share/nginx/html \
+      /var/cache/nginx \
+      /var/log/nginx; \
+    mkdir -p /var/run/nginx; \
+    chown -R nginx:nginx /var/run/nginx; \
+    sed -i 's,^pid .*;,pid /var/run/nginx/nginx.pid;,' /etc/nginx/nginx.conf
 
-# nginx user, no root
-RUN sed -i 's,listen       80;,listen 8080;,g' /etc/nginx/conf.d/default.conf 2>/dev/null || true \
-  && chown -R nginx:nginx /usr/share/nginx/html
+EXPOSE 8080
 
 USER nginx
 CMD ["nginx", "-g", "daemon off;"]
