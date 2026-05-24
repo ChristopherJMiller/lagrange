@@ -212,7 +212,13 @@ nixpkgs.lib.nixosSystem {
           "/home/agent/.claude/statsig" = "statsig";
           "/home/agent/.ssh" = "ssh";
           "/home/agent/work" = "work";
-          "/home/agent/.gitconfig" = "gitconfig";
+          # NOTE: .gitconfig is intentionally NOT bind-mounted. `git config
+          # --global` uses atomic rename (.gitconfig.lock → .gitconfig),
+          # which fails with EBUSY on bind-mounted single files. Instead
+          # we set GIT_CONFIG_GLOBAL=/persistent/gitconfig in the
+          # claude-remote service Environment so git treats the persistent
+          # file as "global" and writes to it directly — rename works
+          # because there's no mount in the way.
           "/home/agent/.claude/.credentials.json" = "credentials.json";
           "/home/agent/.claude.json" = "claude.json";
         };
@@ -271,6 +277,11 @@ nixpkgs.lib.nixosSystem {
           Environment = [
             "HOME=/home/agent"
             "TERM=screen-256color"
+            # Persist git config to /persistent/gitconfig directly
+            # instead of bind-mounting ~/.gitconfig (which breaks the
+            # atomic-rename `git config --global` uses, including the
+            # `git config --global ...` call inside `gh auth setup-git`).
+            "GIT_CONFIG_GLOBAL=/persistent/gitconfig"
           ];
           # Optional env files staged by the admin service. Leading `-`
           # makes each file optional so VMs whose corresponding host-side
