@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { CredStatus, HealthDto, VmDto } from '../api/types'
 
-export type CredKind = 'oauth' | 'credentials' | 'github'
+export type CredKind = 'credentials' | 'github'
 
 export type ToastKind = 'ok' | 'err' | 'info'
 export type ToastItem = { id: string; kind: ToastKind; msg: string; ts: number }
@@ -57,7 +57,7 @@ export const useUi = create<UiState>((set) => ({
   lastFetched: null,
 
   health: null,
-  creds: { oauth: null, credentials: null, github: null },
+  creds: { credentials: null, github: null },
 
   busy: {},
 

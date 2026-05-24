@@ -149,13 +149,8 @@ pub async fn provision_persistent_volume(settings: &Settings, name: &str) -> Api
         perms.set_mode(0o600);
         tokio::fs::set_permissions(&dst, perms).await?;
     }
-    // Stage the Claude Code OAuth token (if set) into the per-VM agent.env
-    // file. The guest's claude-remote.service reads it via EnvironmentFile
-    // and so picks up CLAUDE_CODE_OAUTH_TOKEN at start.
-    crate::oauth_token::stage_for_vm(settings, name).await?;
-    // Same for the full-scope credentials needed by Remote Control. No-op
-    // when the operator hasn't run `claude auth login` and POSTed the
-    // result yet.
+    // Full-scope Claude session needed by Remote Control. No-op when the
+    // operator hasn't run `claude auth login` and POSTed the result yet.
     crate::credentials::stage_for_vm(settings, name).await?;
     // GitHub fine-grained PAT for git push. No-op when not configured.
     crate::github_token::stage_for_vm(settings, name).await?;

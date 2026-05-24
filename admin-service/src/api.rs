@@ -3,7 +3,6 @@ use crate::credentials;
 use crate::db::{self, VmStatus};
 use crate::error::{ApiError, ApiResult};
 use crate::github_token;
-use crate::oauth_token;
 use crate::state::AppState;
 use crate::vm;
 use axum::extract::{ConnectInfo, Path, Query, State};
@@ -34,12 +33,6 @@ pub fn router(state: AppState, auth: Arc<AuthCfg>) -> Router {
         .route("/v1/repos/:name/restart", post(restart_repo))
         .route("/v1/repos/:name/logs", get(repo_logs))
         .route("/v1/repos/:name/session-url", put(set_session_url_external))
-        .route(
-            "/v1/auth/claude-oauth-token",
-            get(get_claude_oauth_token)
-                .post(set_claude_oauth_token)
-                .delete(delete_claude_oauth_token),
-        )
         .route(
             "/v1/auth/claude-credentials",
             get(get_claude_credentials)
@@ -331,43 +324,6 @@ async fn repo_logs(
 ) -> ApiResult<impl IntoResponse> {
     let body = vm::vm_journal_tail(&name, q.lines).await?;
     Ok(([("content-type", "text/plain; charset=utf-8")], body))
-}
-
-#[derive(Deserialize)]
-struct SetTokenRequest {
-    token: String,
-}
-
-async fn get_claude_oauth_token(State(s): State<AppState>) -> ApiResult<Json<oauth_token::Status>> {
-    Ok(Json(oauth_token::status(s.settings.clone()).await?))
-}
-
-async fn set_claude_oauth_token(
-    State(s): State<AppState>,
-    Json(body): Json<SetTokenRequest>,
-) -> ApiResult<StatusCode> {
-    oauth_token::set(&s.settings, &body.token).await?;
-    restage_all_vms(&s).await?;
-    tracing::info!("claude-oauth-token set; restaged all VM env files");
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn delete_claude_oauth_token(State(s): State<AppState>) -> ApiResult<StatusCode> {
-    oauth_token::clear(&s.settings).await?;
-    restage_all_vms(&s).await?;
-    tracing::info!("claude-oauth-token cleared; removed per-VM env files");
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// Rewrite every known VM's agent.env file from the current token state.
-/// Running guests need a restart to pick up rotated values; that's the
-/// operator's call (POST .../restart) so we don't surprise live sessions.
-async fn restage_all_vms(s: &AppState) -> ApiResult<()> {
-    let vms = db::list_vms(&s.db).await?;
-    for v in vms {
-        oauth_token::stage_for_vm(&s.settings, &v.name).await?;
-    }
-    Ok(())
 }
 
 #[derive(Deserialize)]

@@ -24,10 +24,9 @@ export default function App() {
   useEffect(() => {
     if (initialLoad) return
     if (wizardOpen) return
-    const allKnown = creds.oauth && creds.credentials && creds.github
+    const allKnown = creds.credentials && creds.github
     if (!allKnown) return
-    const nonePresent =
-      !creds.oauth?.present && !creds.credentials?.present && !creds.github?.present
+    const nonePresent = !creds.credentials?.present && !creds.github?.present
     if (nonePresent) openWizard(true)
     // run once after initial load resolves
     // eslint-disable-next-line react-hooks/exhaustive-deps

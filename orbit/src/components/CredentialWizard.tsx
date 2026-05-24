@@ -20,11 +20,6 @@ const STEPS: { id: StepId; label: string; hint: string }[] = [
     hint: 'Full-scope login. Required for Remote Control. Paste two files from your local machine.',
   },
   {
-    id: 'oauth',
-    label: 'Claude OAuth Token',
-    hint: 'Inference-only fallback token from `claude setup-token`. Single line.',
-  },
-  {
     id: 'github',
     label: 'GitHub PAT',
     hint: 'Fine-grained personal access token. Used by `git push` inside each vessel.',
@@ -92,7 +87,6 @@ export function CredentialWizard() {
 
       <div className="mt-4">
         {step.id === 'credentials' && <CredentialsStep />}
-        {step.id === 'oauth' && <OauthStep />}
         {step.id === 'github' && <GithubStep />}
       </div>
 
@@ -204,73 +198,6 @@ function CredentialsStep() {
       <div className="flex items-center justify-between">
         <span className="text-[10px] uppercase tracking-widest text-dimmer">
           POST /v1/auth/claude-credentials
-        </span>
-        <div className="flex gap-2">
-          {present && (
-            <Button variant="danger" size="sm" onClick={clear} loading={busy}>
-              Clear
-            </Button>
-          )}
-          <Button variant="hero" size="md" onClick={submit} disabled={!valid} loading={busy}>
-            Stage
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function OauthStep() {
-  const toast = useUi((s) => s.toast)
-  const present = useUi((s) => s.creds.oauth?.present)
-  const [token, setToken] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const valid = token.trim().length > 8 && !token.includes('\n')
-
-  async function submit() {
-    if (!valid) return
-    setBusy(true)
-    setError(null)
-    try {
-      await api.setOauthToken(token.trim())
-      toast('ok', 'claude oauth token staged')
-      await refreshNow()
-      setToken('')
-    } catch (e) {
-      setError(isApiError(e) ? e.message : 'failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-  async function clear() {
-    setBusy(true)
-    try {
-      await api.clearOauthToken()
-      toast('ok', 'claude oauth token cleared')
-      await refreshNow()
-    } catch (e) {
-      toast('err', isApiError(e) ? e.message : 'failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="space-y-3">
-      <Field
-        label="Token"
-        name="oauth"
-        type="password"
-        placeholder="sk-ant-oat01-…"
-        autoComplete="off"
-        value={token}
-        onChange={(e) => setToken(e.target.value)}
-      />
-      {error && <div className="border border-red/40 bg-red/5 px-3 py-2 text-xs text-red font-mono">{error}</div>}
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] uppercase tracking-widest text-dimmer">
-          POST /v1/auth/claude-oauth-token
         </span>
         <div className="flex gap-2">
           {present && (

@@ -5,18 +5,13 @@ import { Button } from './ui/Button'
 import { SectionHeader } from './ui/Bracket'
 import { cn } from '../lib/cn'
 
-type Item = { kind: 'oauth' | 'credentials' | 'github'; label: string; sub: string }
+type Item = { kind: 'credentials' | 'github'; label: string; sub: string }
 
 const ITEMS: Item[] = [
   {
     kind: 'credentials',
     label: 'Claude Session',
     sub: 'full-scope login — required for Remote Control',
-  },
-  {
-    kind: 'oauth',
-    label: 'Claude OAuth Token',
-    sub: 'inference-only fallback',
   },
   {
     kind: 'github',
@@ -46,7 +41,7 @@ export function CredentialStatusRow() {
               : `${missingCount} unstaged`
         }
       />
-      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3">
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
         {ITEMS.map((it) => {
           const s = creds[it.kind]
           const present = s?.present

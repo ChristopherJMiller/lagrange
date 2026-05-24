@@ -12,7 +12,6 @@ mod credentials;
 mod db;
 mod error;
 mod github_token;
-mod oauth_token;
 mod state;
 mod vm;
 

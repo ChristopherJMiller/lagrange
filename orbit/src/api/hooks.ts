@@ -23,17 +23,15 @@ export function usePolling() {
     const tick = async () => {
       const ui = useUi.getState()
       try {
-        const [vms, health, oauth, credentials, github] = await Promise.all([
+        const [vms, health, credentials, github] = await Promise.all([
           api.listVms(),
           api.health().catch(() => null),
-          api.getOauthToken().catch(() => null),
           api.getCredentials().catch(() => null),
           api.getGithubToken().catch(() => null),
         ])
         if (cancelled) return
         ui.setVms(vms)
         ui.setHealth(health)
-        ui.setCred('oauth', oauth)
         ui.setCred('credentials', credentials)
         ui.setCred('github', github)
         ui.setVmsError(null)
@@ -63,16 +61,14 @@ export function usePolling() {
 export async function refreshNow() {
   const ui = useUi.getState()
   try {
-    const [vms, health, oauth, credentials, github] = await Promise.all([
+    const [vms, health, credentials, github] = await Promise.all([
       api.listVms(),
       api.health().catch(() => null),
-      api.getOauthToken().catch(() => null),
       api.getCredentials().catch(() => null),
       api.getGithubToken().catch(() => null),
     ])
     ui.setVms(vms)
     ui.setHealth(health)
-    ui.setCred('oauth', oauth)
     ui.setCred('credentials', credentials)
     ui.setCred('github', github)
     ui.setVmsError(null)

@@ -68,15 +68,6 @@ export const api = {
   getLogs: (n: string, lines = 200) =>
     request<string>(`/v1/repos/${encodeURIComponent(n)}/logs?lines=${lines}`),
 
-  getOauthToken: () => request<CredStatus>('/v1/auth/claude-oauth-token'),
-  setOauthToken: (token: string) =>
-    request<void>('/v1/auth/claude-oauth-token', {
-      method: 'POST',
-      body: JSON.stringify({ token }),
-    }),
-  clearOauthToken: () =>
-    request<void>('/v1/auth/claude-oauth-token', { method: 'DELETE' }),
-
   getCredentials: () => request<CredStatus>('/v1/auth/claude-credentials'),
   setCredentials: (credentials_json: string, claude_json: string) =>
     request<void>('/v1/auth/claude-credentials', {
