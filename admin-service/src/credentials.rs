@@ -94,31 +94,81 @@ pub async fn clear(s: &Settings) -> ApiResult<()> {
     Ok(())
 }
 
+/// Path inside the guest where claude-code clones the operator's repo
+/// and where Remote Control's pre-created session opens. Must be in the
+/// claude-install.json's `projects` map with hasTrustDialogAccepted=true
+/// or claude refuses to register a session ("Workspace not trusted").
+const GUEST_WORKDIR: &str = "/home/agent/work";
+
 /// Stage (or restage) a single VM's credentials files from the current
 /// host state. Removes the per-VM files if the host has nothing to stage,
 /// so a clear-then-restart sequence doesn't leave stale creds in a VM.
+///
+/// `claude-install.json` gets a `projects["/home/agent/work"]
+/// .hasTrustDialogAccepted = true` entry injected on the way out — the
+/// operator's original file only knows about workstation paths, but
+/// `claude remote-control` refuses to register a session for an
+/// untrusted workspace and there's no CLI flag on the subcommand to
+/// bypass the trust dialog.
 pub async fn stage_for_vm(s: &Settings, name: &str) -> ApiResult<()> {
     let agent_dir = s.agent_state_dir(name);
     tokio::fs::create_dir_all(&agent_dir).await?;
 
-    let pairs = [
-        (host_creds_path(s), vm_creds_path(s, name)),
-        (host_install_path(s), vm_install_path(s, name)),
-    ];
-    for (host, vm) in pairs {
-        match tokio::fs::read_to_string(&host).await {
-            Ok(content) => write_atomic_0640_users(&vm, &content).await?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                match tokio::fs::remove_file(&vm).await {
-                    Ok(_) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(ApiError::Io(e)),
-                }
-            }
-            Err(e) => return Err(ApiError::Io(e)),
+    // credentials.json: copied verbatim.
+    match tokio::fs::read_to_string(&host_creds_path(s)).await {
+        Ok(content) => write_atomic_0640_users(&vm_creds_path(s, name), &content).await?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            remove_if_exists(&vm_creds_path(s, name)).await?
         }
+        Err(e) => return Err(ApiError::Io(e)),
+    }
+
+    // claude-install.json: parse, inject trust for /home/agent/work, serialize.
+    match tokio::fs::read_to_string(&host_install_path(s)).await {
+        Ok(content) => {
+            let patched = inject_workspace_trust(&content)?;
+            write_atomic_0640_users(&vm_install_path(s, name), &patched).await?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            remove_if_exists(&vm_install_path(s, name)).await?
+        }
+        Err(e) => return Err(ApiError::Io(e)),
     }
     Ok(())
+}
+
+async fn remove_if_exists(path: &std::path::Path) -> ApiResult<()> {
+    match tokio::fs::remove_file(path).await {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(ApiError::Io(e)),
+    }
+}
+
+fn inject_workspace_trust(json: &str) -> ApiResult<String> {
+    let mut v: serde_json::Value = serde_json::from_str(json).map_err(|e| {
+        ApiError::Other(anyhow::anyhow!(
+            "host-staged claude-install.json is not valid JSON: {e}"
+        ))
+    })?;
+    let projects = v
+        .as_object_mut()
+        .ok_or_else(|| ApiError::Other(anyhow::anyhow!("claude-install.json root is not object")))?
+        .entry("projects")
+        .or_insert_with(|| serde_json::json!({}));
+    let projects_obj = projects.as_object_mut().ok_or_else(|| {
+        ApiError::Other(anyhow::anyhow!(
+            "claude-install.json `projects` is not an object"
+        ))
+    })?;
+    let entry = projects_obj
+        .entry(GUEST_WORKDIR.to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(entry_obj) = entry.as_object_mut() {
+        entry_obj.insert("hasTrustDialogAccepted".into(), serde_json::json!(true));
+    }
+    Ok(serde_json::to_string(&v)
+        .map_err(|e| ApiError::Other(anyhow::anyhow!("serialize patched claude-install.json: {e}")))?)
 }
 
 fn validate_json(body: &str, field: &'static str) -> ApiResult<()> {
@@ -216,7 +266,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stage_copies_both_files_with_0640() {
+    async fn stage_copies_credentials_verbatim_and_patches_install() {
         let s = TempDir::new().unwrap();
         let a = TempDir::new().unwrap();
         let cfg = test_settings(s.path(), a.path());
@@ -227,10 +277,45 @@ mod tests {
         let cpath = vm_creds_path(&cfg, "alpha");
         let ipath = vm_install_path(&cfg, "alpha");
         assert_eq!(std::fs::read_to_string(&cpath).unwrap(), "{\"a\":1}");
-        assert_eq!(std::fs::read_to_string(&ipath).unwrap(), "{\"b\":2}");
+        // .claude.json gets the trust entry injected — parse to make the
+        // assertion robust against key ordering.
+        let installed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&ipath).unwrap()).unwrap();
+        assert_eq!(installed["b"], serde_json::json!(2));
+        assert_eq!(
+            installed["projects"]["/home/agent/work"]["hasTrustDialogAccepted"],
+            serde_json::json!(true)
+        );
         assert_eq!(
             std::fs::metadata(&cpath).unwrap().permissions().mode() & 0o777,
             0o640
+        );
+    }
+
+    #[test]
+    fn inject_workspace_trust_creates_projects_when_absent() {
+        let patched = inject_workspace_trust("{}").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&patched).unwrap();
+        assert_eq!(
+            v["projects"]["/home/agent/work"]["hasTrustDialogAccepted"],
+            serde_json::json!(true)
+        );
+    }
+
+    #[test]
+    fn inject_workspace_trust_preserves_existing_projects() {
+        let input = serde_json::json!({
+            "projects": {
+                "/home/chris/other": { "hasTrustDialogAccepted": true, "x": 1 }
+            }
+        })
+        .to_string();
+        let patched = inject_workspace_trust(&input).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&patched).unwrap();
+        assert_eq!(v["projects"]["/home/chris/other"]["x"], serde_json::json!(1));
+        assert_eq!(
+            v["projects"]["/home/agent/work"]["hasTrustDialogAccepted"],
+            serde_json::json!(true)
         );
     }
 
