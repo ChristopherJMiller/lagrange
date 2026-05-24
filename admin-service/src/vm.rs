@@ -155,8 +155,60 @@ pub async fn provision_persistent_volume(settings: &Settings, name: &str) -> Api
     // Full-scope Claude session needed by Remote Control. No-op when the
     // operator hasn't run `claude auth login` and POSTed the result yet.
     crate::credentials::stage_for_vm(settings, name).await?;
-    // GitHub fine-grained PAT for git push. No-op when not configured.
-    crate::github_token::stage_for_vm(settings, name).await?;
+    // GitHub PAT staging is per-account now; the admin API restages from
+    // the assigned account when (a) a VM is created, (b) the assigned
+    // account's token is updated, or (c) the VM is reassigned. The
+    // provisioning path here doesn't know the alias — callers thread it
+    // in via stage_github_for_vm below.
+    Ok(())
+}
+
+/// Write the per-VM gh.env using the token for `account` (or remove the
+/// file if `account` is None or has no staged token).
+pub async fn stage_github_for_vm(
+    settings: &Settings,
+    name: &str,
+    account: Option<&str>,
+) -> ApiResult<()> {
+    let env_path = settings.agent_state_dir(name).join("gh.env");
+    let token = match account {
+        Some(alias) => crate::github_accounts::read_token(settings, alias).await?,
+        None => None,
+    };
+    match token {
+        Some(tok) => {
+            let body = format!("GITHUB_TOKEN={tok}\nGH_TOKEN={tok}\n");
+            tokio::fs::create_dir_all(
+                env_path
+                    .parent()
+                    .ok_or_else(|| ApiError::Other(anyhow::anyhow!("env path has no parent")))?,
+            )
+            .await?;
+            // Same group-readable shape as the credentials file so the
+            // guest agent (gid 100 / users) can read at 0640.
+            use std::os::unix::fs::OpenOptionsExt;
+            use std::io::Write;
+            let env_clone = env_path.clone();
+            tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+                let mut f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o640)
+                    .open(&env_clone)?;
+                f.write_all(body.as_bytes())?;
+                std::os::unix::fs::chown(&env_clone, None, Some(100))?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| ApiError::Other(anyhow::anyhow!("join: {e}")))??;
+        }
+        None => match tokio::fs::remove_file(&env_path).await {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(ApiError::Io(e)),
+        },
+    }
     Ok(())
 }
 
@@ -170,6 +222,12 @@ pub async fn microvm_create_and_start(settings: &Settings, name: &str) -> ApiRes
     let flake_ref = flake_path.display().to_string();
 
     run_cmd("microvm", &["-c", name, "-f", &flake_ref]).await?;
+    // Enable BEFORE start so a crash between the two doesn't strand the VM
+    // in a "running but not enabled" state — the next host reboot would
+    // otherwise lose it silently. systemctl enable on a template instance
+    // adds a wants link to microvms.target, which the host module pulls
+    // up at boot.
+    run_cmd("systemctl", &["enable", &format!("microvm@{}", name)]).await?;
     run_cmd("systemctl", &["start", &format!("microvm@{}", name)]).await?;
     Ok(())
 }
@@ -194,6 +252,10 @@ pub async fn microvm_status(name: &str) -> ApiResult<String> {
 
 pub async fn microvm_destroy(name: &str) -> ApiResult<()> {
     let _ = microvm_stop(name).await;
+    // Disable to remove the microvms.target wants link; without this the
+    // unit definition would linger and systemd would warn about a dangling
+    // symlink on next reload.
+    let _ = run_cmd("systemctl", &["disable", &format!("microvm@{}", name)]).await;
     run_cmd("microvm", &["-d", name]).await
 }
 

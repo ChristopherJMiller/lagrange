@@ -5,6 +5,7 @@ import type {
   CreateVmReq,
   CreateVmResp,
   CredStatus,
+  GithubAccount,
   GithubRepoDto,
   HealthDto,
   VmDto,
@@ -53,7 +54,25 @@ async function request<T = unknown>(path: string, init?: RequestInit): Promise<T
 export const api = {
   health: () => request<HealthDto>('/v1/health'),
   capacity: () => request<CapacityDto>('/v1/system/capacity'),
-  listGithubRepos: () => request<GithubRepoDto[]>('/v1/github/repos'),
+  listGithubRepos: (account?: string) =>
+    request<GithubRepoDto[]>(
+      account ? `/v1/github/repos?account=${encodeURIComponent(account)}` : '/v1/github/repos',
+    ),
+  listGithubAccounts: () => request<GithubAccount[]>('/v1/auth/github-accounts'),
+  upsertGithubAccount: (alias: string, token: string) =>
+    request<void>(`/v1/auth/github-accounts/${encodeURIComponent(alias)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ token }),
+    }),
+  deleteGithubAccount: (alias: string) =>
+    request<void>(`/v1/auth/github-accounts/${encodeURIComponent(alias)}`, {
+      method: 'DELETE',
+    }),
+  setVmGithubAccount: (name: string, account: string | null) =>
+    request<void>(`/v1/repos/${encodeURIComponent(name)}/github-account`, {
+      method: 'PUT',
+      body: JSON.stringify({ account }),
+    }),
   getAgentClaudeMd: () => request<AgentClaudeMdDto>('/v1/agent/claude-md'),
   putAgentClaudeMd: (content: string) =>
     request<void>('/v1/agent/claude-md', {
@@ -87,13 +106,4 @@ export const api = {
     }),
   clearCredentials: () =>
     request<void>('/v1/auth/claude-credentials', { method: 'DELETE' }),
-
-  getGithubToken: () => request<CredStatus>('/v1/auth/github-token'),
-  setGithubToken: (token: string) =>
-    request<void>('/v1/auth/github-token', {
-      method: 'POST',
-      body: JSON.stringify({ token }),
-    }),
-  clearGithubToken: () =>
-    request<void>('/v1/auth/github-token', { method: 'DELETE' }),
 }

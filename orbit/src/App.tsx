@@ -19,17 +19,19 @@ export default function App() {
 
   // Auto-open the wizard on first run if NO credentials are staged at all.
   const initialLoad = useUi((s) => s.initialLoad)
-  const creds = useUi((s) => s.creds)
+  const credentials = useUi((s) => s.credentials)
+  const githubAccounts = useUi((s) => s.githubAccounts)
   const wizardOpen = useUi((s) => s.wizardOpen)
   const openWizard = useUi((s) => s.openWizard)
 
   useEffect(() => {
     if (initialLoad) return
     if (wizardOpen) return
-    const allKnown = creds.credentials && creds.github
+    const allKnown = credentials !== null && githubAccounts !== null
     if (!allKnown) return
-    const nonePresent = !creds.credentials?.present && !creds.github?.present
-    if (nonePresent) openWizard(true)
+    const claudeMissing = !credentials.present
+    const githubMissing = githubAccounts.every((a) => !a.present)
+    if (claudeMissing && githubMissing) openWizard(true)
     // run once after initial load resolves
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialLoad])

@@ -1,22 +1,23 @@
 //! GitHub repos lister.
 //!
-//! Server-side proxy to `GET /user/repos` on api.github.com using the
-//! staged github-token. Done server-side rather than client-side for
-//! two reasons:
-//!   1. the operator's PAT never leaves the satellite — the orbit UI
-//!      doesn't need to handle it
-//!   2. the same cookie auth that gates orbit also gates this endpoint,
-//!      so no separate token shape on the frontend
+//! Server-side proxy to `GET /user/repos` on api.github.com using one of
+//! the staged github-accounts PATs. Done server-side rather than
+//! client-side because:
+//!   1. operator PATs never leave the satellite — orbit doesn't handle
+//!      raw tokens
+//!   2. the same cookie auth that gates orbit also gates this endpoint
 //!
-//! Small in-process cache (60s) keeps GH rate limits friendly during
-//! the deploy-flow UX where the operator may open/close the dropdown
-//! several times.
+//! Small in-process cache (60s) keyed by alias keeps GH rate limits
+//! friendly during the deploy-flow UX where the operator may open and
+//! close the dropdown several times.
 
 use crate::config::Settings;
 use crate::error::{ApiError, ApiResult};
-use crate::github_token;
+use crate::github_accounts;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -49,32 +50,71 @@ struct CacheSlot {
     repos: Vec<Repo>,
 }
 
-static CACHE: Lazy<Mutex<Option<CacheSlot>>> = Lazy::new(|| Mutex::new(None));
+static CACHE: Lazy<Mutex<HashMap<String, CacheSlot>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 const CACHE_TTL: Duration = Duration::from_secs(60);
 
 pub fn invalidate_cache() {
     if let Ok(mut g) = CACHE.lock() {
-        *g = None;
+        g.clear();
     }
 }
 
-pub async fn list_for_operator(settings: &Settings) -> ApiResult<Vec<Repo>> {
+/// Resolve the account alias to use. If the caller specified one, use it;
+/// else if there's exactly one account staged, use it; else fail with a
+/// helpful bad_request explaining the operator needs to pick.
+async fn resolve_alias(
+    pool: &SqlitePool,
+    settings: &Settings,
+    requested: Option<&str>,
+) -> ApiResult<String> {
+    if let Some(a) = requested {
+        if !github_accounts::exists(pool, a).await? {
+            return Err(ApiError::BadRequest(format!(
+                "github_account '{}' does not exist",
+                a
+            )));
+        }
+        return Ok(a.to_string());
+    }
+    let mut accounts = github_accounts::list(pool, settings).await?;
+    accounts.retain(|a| a.present);
+    match accounts.len() {
+        0 => Err(ApiError::BadRequest(
+            "no github-accounts staged — PUT /v1/auth/github-accounts/<alias> first".into(),
+        )),
+        1 => Ok(accounts.remove(0).alias),
+        _ => Err(ApiError::BadRequest(format!(
+            "multiple github-accounts staged ({}) — specify ?account=<alias>",
+            accounts
+                .iter()
+                .map(|a| a.alias.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        ))),
+    }
+}
+
+pub async fn list_for_account(
+    pool: &SqlitePool,
+    settings: &Settings,
+    requested_alias: Option<&str>,
+) -> ApiResult<Vec<Repo>> {
+    let alias = resolve_alias(pool, settings, requested_alias).await?;
+
     if let Ok(g) = CACHE.lock() {
-        if let Some(slot) = g.as_ref() {
+        if let Some(slot) = g.get(&alias) {
             if slot.fetched_at.elapsed() < CACHE_TTL {
                 return Ok(slot.repos.clone());
             }
         }
     }
 
-    let token = match github_token::read(settings).await? {
-        Some(t) => t,
-        None => {
-            return Err(ApiError::BadRequest(
-                "github-token not staged — POST /v1/auth/github-token first".into(),
-            ));
-        }
-    };
+    let token = github_accounts::read_token(settings, &alias).await?.ok_or_else(|| {
+        ApiError::BadRequest(format!(
+            "github_account '{}' has no token staged on disk",
+            alias
+        ))
+    })?;
 
     let client = reqwest::Client::builder()
         .user_agent("lagrange-admin/0.1")
@@ -83,8 +123,8 @@ pub async fn list_for_operator(settings: &Settings) -> ApiResult<Vec<Repo>> {
         .build()
         .map_err(|e| ApiError::Upstream(format!("reqwest build: {e}")))?;
 
-    // 100 is the per-page max. We don't paginate: if the operator owns
-    // more than 100 repos they can always paste a URL.
+    // 100 is GH's per-page max. We don't paginate — a 100-repo cap is fine
+    // for the deploy combobox; if an operator owns more, they can paste.
     let resp = client
         .get("https://api.github.com/user/repos")
         .query(&[
@@ -130,10 +170,13 @@ pub async fn list_for_operator(settings: &Settings) -> ApiResult<Vec<Repo>> {
         .collect();
 
     if let Ok(mut g) = CACHE.lock() {
-        *g = Some(CacheSlot {
-            fetched_at: Instant::now(),
-            repos: repos.clone(),
-        });
+        g.insert(
+            alias,
+            CacheSlot {
+                fetched_at: Instant::now(),
+                repos: repos.clone(),
+            },
+        );
     }
 
     Ok(repos)

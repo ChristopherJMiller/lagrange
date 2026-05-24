@@ -7,6 +7,12 @@ import { cn } from '../lib/cn'
 type Props = {
   value: string
   onChange: (url: string, defaultBranch: string | null) => void
+  /**
+   * Which github account's PAT to query. Required when more than one
+   * account is staged. Changing this invalidates the cached list and
+   * forces a re-fetch on next open.
+   */
+  account: string | null
   className?: string
 }
 
@@ -17,7 +23,7 @@ type Props = {
  * load. Selecting a repo also auto-fills the default branch in the
  * parent form.
  */
-export function RepoPicker({ value, onChange, className }: Props) {
+export function RepoPicker({ value, onChange, account, className }: Props) {
   const [repos, setRepos] = useState<GithubRepoDto[] | null>(null)
   const [loadState, setLoadState] = useState<'idle' | 'loading' | 'ok' | 'err'>('idle')
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -28,12 +34,19 @@ export function RepoPicker({ value, onChange, className }: Props) {
     setFilter(value)
   }, [value])
 
+  // Reset cached repos whenever the selected account changes.
+  useEffect(() => {
+    setRepos(null)
+    setLoadState('idle')
+    setLoadError(null)
+  }, [account])
+
   async function loadRepos() {
     if (loadState === 'loading' || loadState === 'ok') return
     setLoadState('loading')
     setLoadError(null)
     try {
-      const r = await api.listGithubRepos()
+      const r = await api.listGithubRepos(account ?? undefined)
       setRepos(r)
       setLoadState('ok')
     } catch (e) {
@@ -109,13 +122,15 @@ export function RepoPicker({ value, onChange, className }: Props) {
       {open && (
         <div className="mt-1 max-h-72 overflow-y-auto border border-border bg-surface-2 shadow-lg">
           {loadState === 'loading' && (
-            <div className="px-3 py-3 text-[11px] text-dim">loading from github…</div>
+            <div className="px-3 py-3 text-[11px] text-dim">
+              loading from github{account ? ` as ${account}` : ''}…
+            </div>
           )}
           {loadState === 'err' && (
             <div className="px-3 py-3 text-[11px] text-red">
               ! {loadError}
               <div className="mt-1 text-[10px] text-dim">
-                stage a GitHub PAT (open the credential brief) then try again
+                pick a github account above, then try again
               </div>
             </div>
           )}

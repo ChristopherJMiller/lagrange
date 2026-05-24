@@ -13,8 +13,8 @@ mod config;
 mod credentials;
 mod db;
 mod error;
+mod github_accounts;
 mod github_repos;
-mod github_token;
 mod state;
 mod vm;
 
@@ -67,6 +67,11 @@ async fn main() -> anyhow::Result<()> {
 async fn run_server(settings: Settings) -> anyhow::Result<()> {
     let pool = db::connect_and_migrate(&settings.state_db_path()).await?;
     db::seed_ip_pool_if_empty(&pool, &settings.ip_pool_cidr).await?;
+    // One-shot: pull pre-multi-PAT singleton into the github_accounts/default
+    // alias if it's still on disk. Safe and idempotent (no-op when absent).
+    if let Err(e) = github_accounts::migrate_legacy_singleton(&pool, &settings).await {
+        tracing::error!(error = ?e, "legacy github-token migration failed");
+    }
 
     let app_state = state::AppState::new(settings.clone(), pool);
     let token = std::fs::read_to_string(&settings.token_file)

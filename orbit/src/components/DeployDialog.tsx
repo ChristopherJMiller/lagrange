@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Dialog } from './ui/Dialog'
 import { Field } from './ui/Input'
 import { Button } from './ui/Button'
@@ -18,6 +18,8 @@ export function DeployDialog() {
   const close = useUi((s) => s.closeDeploy)
   const toast = useUi((s) => s.toast)
   const capacity = useUi((s) => s.capacity)
+  const accounts = useUi((s) => s.githubAccounts) ?? []
+  const presentAccounts = accounts.filter((a) => a.present)
 
   const [name, setName] = useState('')
   const [repoUrl, setRepoUrl] = useState('')
@@ -26,8 +28,22 @@ export function DeployDialog() {
   const [vcpu, setVcpu] = useState(4)
   const [memGib, setMemGib] = useState(4)
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('auto')
+  const [githubAccount, setGithubAccount] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // When opening: default to the single available account, or whichever
+  // alias is most recent.
+  useEffect(() => {
+    if (!open) return
+    if (githubAccount && presentAccounts.some((a) => a.alias === githubAccount)) return
+    if (presentAccounts.length === 1) {
+      setGithubAccount(presentAccounts[0].alias)
+    } else if (presentAccounts.length === 0) {
+      setGithubAccount(null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, presentAccounts.length])
 
   function reset() {
     setName('')
@@ -36,6 +52,7 @@ export function DeployDialog() {
     setVcpu(4)
     setMemGib(4)
     setPermissionMode('auto')
+    setGithubAccount(presentAccounts.length === 1 ? presentAccounts[0].alias : null)
     setShowAdv(false)
     setError(null)
     setSubmitting(false)
@@ -72,6 +89,7 @@ export function DeployDialog() {
         vcpu,
         mem_mb: memMb,
         permission_mode: permissionMode,
+        github_account: githubAccount,
       })
       toast('ok', `vessel "${resp.name}" deployed at ${resp.vm_ip}`)
       await refreshNow()
@@ -108,8 +126,34 @@ export function DeployDialog() {
           onChange={(e) => setName(e.target.value.toLowerCase())}
           autoFocus
         />
+        <div>
+          <div className="mb-1.5 flex items-baseline justify-between gap-2">
+            <span className="text-[10px] uppercase tracking-widest text-dim">GitHub Account</span>
+            <span className="text-[10px] uppercase tracking-wider text-dimmer">
+              {presentAccounts.length === 0
+                ? 'none staged — paste a URL or stage a PAT'
+                : `used for repo list & git push`}
+            </span>
+          </div>
+          <div className="flex border border-border bg-bg/60">
+            <span className="px-2 text-cyan opacity-60 select-none self-center">›</span>
+            <select
+              value={githubAccount ?? ''}
+              onChange={(e) => setGithubAccount(e.target.value || null)}
+              className="block w-full bg-transparent py-2 pr-3 font-mono text-sm text-text outline-none"
+            >
+              <option value="">— none —</option>
+              {presentAccounts.map((a) => (
+                <option key={a.alias} value={a.alias}>
+                  {a.alias}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
         <RepoPicker
           value={repoUrl}
+          account={githubAccount}
           onChange={(url, defaultBranch) => {
             setRepoUrl(url)
             if (defaultBranch) setBranch(defaultBranch)

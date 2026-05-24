@@ -160,10 +160,17 @@ in
     # operator who's in kvm) to manage microvm@*.service over the system
     # bus. polkit is the privilege gate that used to be sudo — narrower
     # (per-action, per-unit-glob) and lets us keep NoNewPrivileges=true.
+    #
+    # Two action IDs needed:
+    #   manage-units      — start/stop/restart instances
+    #   manage-unit-files — enable/disable instances (so VMs survive a
+    #                       host reboot via microvms.target.wants)
     security.polkit.enable = true;
     security.polkit.extraConfig = ''
       polkit.addRule(function(action, subject) {
-        if (action.id !== "org.freedesktop.systemd1.manage-units") return;
+        var allowed = action.id === "org.freedesktop.systemd1.manage-units"
+                   || action.id === "org.freedesktop.systemd1.manage-unit-files";
+        if (!allowed) return;
         if (!subject.isInGroup("kvm")) return;
         var unit = action.lookup("unit") || "";
         if (unit.indexOf("microvm@") === 0) {

@@ -203,6 +203,16 @@ export function VesselCard({ vm }: { vm: VmDto }) {
             )
           }
         />
+        <DataRow
+          label="GH ACCT"
+          value={
+            vm.github_account ? (
+              <span className="text-text">{vm.github_account}</span>
+            ) : (
+              <span className="text-dimmer">— none —</span>
+            )
+          }
+        />
       </div>
 
       {/* divider */}

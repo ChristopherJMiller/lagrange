@@ -12,6 +12,14 @@ export type VmDto = {
   claude_session_name: string | null
   claude_session_url: string | null
   permission_mode: PermissionMode
+  github_account: string | null
+}
+
+export type GithubAccount = {
+  alias: string
+  present: boolean
+  set_at: string | null
+  created_at: string
 }
 
 export type CapacityDto = {
@@ -55,6 +63,7 @@ export type CreateVmReq = {
   vcpu?: number
   mem_mb?: number
   permission_mode?: PermissionMode
+  github_account?: string | null
 }
 
 export type CreateVmResp = {

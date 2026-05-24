@@ -23,19 +23,19 @@ export function usePolling() {
     const tick = async () => {
       const ui = useUi.getState()
       try {
-        const [vms, health, capacity, credentials, github] = await Promise.all([
+        const [vms, health, capacity, credentials, accounts] = await Promise.all([
           api.listVms(),
           api.health().catch(() => null),
           api.capacity().catch(() => null),
           api.getCredentials().catch(() => null),
-          api.getGithubToken().catch(() => null),
+          api.listGithubAccounts().catch(() => null),
         ])
         if (cancelled) return
         ui.setVms(vms)
         ui.setHealth(health)
         ui.setCapacity(capacity)
-        ui.setCred('credentials', credentials)
-        ui.setCred('github', github)
+        ui.setCredentials(credentials)
+        ui.setGithubAccounts(accounts)
         ui.setVmsError(null)
         ui.setLastFetched(Date.now())
         ui.markInitialLoaded()
@@ -63,18 +63,18 @@ export function usePolling() {
 export async function refreshNow() {
   const ui = useUi.getState()
   try {
-    const [vms, health, capacity, credentials, github] = await Promise.all([
+    const [vms, health, capacity, credentials, accounts] = await Promise.all([
       api.listVms(),
       api.health().catch(() => null),
       api.capacity().catch(() => null),
       api.getCredentials().catch(() => null),
-      api.getGithubToken().catch(() => null),
+      api.listGithubAccounts().catch(() => null),
     ])
     ui.setVms(vms)
     ui.setHealth(health)
     ui.setCapacity(capacity)
-    ui.setCred('credentials', credentials)
-    ui.setCred('github', github)
+    ui.setCredentials(credentials)
+    ui.setGithubAccounts(accounts)
     ui.setVmsError(null)
     ui.setLastFetched(Date.now())
   } catch (e) {

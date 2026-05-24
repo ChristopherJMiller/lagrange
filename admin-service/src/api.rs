@@ -4,8 +4,8 @@ use crate::capacity;
 use crate::credentials;
 use crate::db::{self, VmStatus};
 use crate::error::{ApiError, ApiResult};
+use crate::github_accounts;
 use crate::github_repos;
-use crate::github_token;
 use crate::state::AppState;
 use crate::vm;
 use axum::extract::{ConnectInfo, Path, Query, State};
@@ -48,11 +48,14 @@ pub fn router(state: AppState, auth: Arc<AuthCfg>) -> Router {
                 .post(set_claude_credentials)
                 .delete(delete_claude_credentials),
         )
+        .route("/v1/auth/github-accounts", get(list_github_accounts))
         .route(
-            "/v1/auth/github-token",
-            get(get_github_token)
-                .post(set_github_token)
-                .delete(delete_github_token),
+            "/v1/auth/github-accounts/:alias",
+            put(upsert_github_account).delete(delete_github_account),
+        )
+        .route(
+            "/v1/repos/:name/github-account",
+            put(set_vm_github_account),
         )
         .layer(middleware::from_fn(move |req, next| {
             let auth = auth.clone();
@@ -81,10 +84,19 @@ async fn system_capacity(State(s): State<AppState>) -> ApiResult<Json<capacity::
     Ok(Json(capacity::snapshot(&s.db).await?))
 }
 
+#[derive(Deserialize)]
+struct ListReposQuery {
+    #[serde(default)]
+    account: Option<String>,
+}
+
 async fn list_github_repos(
     State(s): State<AppState>,
+    Query(q): Query<ListReposQuery>,
 ) -> ApiResult<Json<Vec<github_repos::Repo>>> {
-    Ok(Json(github_repos::list_for_operator(&s.settings).await?))
+    Ok(Json(
+        github_repos::list_for_account(&s.db, &s.settings, q.account.as_deref()).await?,
+    ))
 }
 
 async fn get_agent_claude_md(
@@ -131,6 +143,11 @@ struct CreateRepo {
     mem_mb: i64,
     #[serde(default = "default_permission_mode")]
     permission_mode: String,
+    /// Alias of the github_accounts row to stage into gh.env. None →
+    /// no GITHUB_TOKEN inside the guest. If the alias is unknown,
+    /// returns 400.
+    #[serde(default)]
+    github_account: Option<String>,
 }
 
 fn default_branch() -> String {
@@ -179,6 +196,14 @@ async fn create_repo(
         return Err(ApiError::BadRequest("mem_mb out of range".into()));
     }
     validate_permission_mode(&body.permission_mode)?;
+    if let Some(ref alias) = body.github_account {
+        if !github_accounts::exists(&s.db, alias).await? {
+            return Err(ApiError::BadRequest(format!(
+                "github_account '{}' does not exist — create it with PUT /v1/auth/github-accounts/{}",
+                alias, alias
+            )));
+        }
+    }
 
     // Serialize provisioning per-name so a concurrent DELETE/start can't race.
     let _guard = s.lock_vm(&body.name).await;
@@ -194,6 +219,7 @@ async fn create_repo(
         body.vcpu,
         body.mem_mb,
         &body.permission_mode,
+        body.github_account.as_deref(),
     )
     .await?;
 
@@ -221,6 +247,18 @@ async fn create_repo(
         let _ = db::release_ip(&s.db, &body.name, &ip).await;
         let _ = db::delete_vm(&s.db, &body.name).await;
         return Err(e);
+    }
+
+    // Stage the per-VM gh.env from the assigned account (if any). Done
+    // AFTER provision_persistent_volume so the agent state dir exists.
+    if let Err(e) = vm::stage_github_for_vm(
+        &s.settings,
+        &body.name,
+        body.github_account.as_deref(),
+    )
+    .await
+    {
+        tracing::warn!(vm = %body.name, error = %e, "github staging failed; vessel will boot without GITHUB_TOKEN");
     }
 
     if let Err(e) = vm::microvm_create_and_start(&s.settings, &body.name).await {
@@ -257,6 +295,7 @@ struct VmDto {
     claude_session_name: Option<String>,
     claude_session_url: Option<String>,
     permission_mode: String,
+    github_account: Option<String>,
 }
 
 impl VmDto {
@@ -273,6 +312,7 @@ impl VmDto {
             claude_session_name: r.claude_session_name,
             claude_session_url: r.claude_session_url,
             permission_mode: r.permission_mode,
+            github_account: r.github_account,
         }
     }
 }
@@ -427,44 +467,85 @@ async fn restage_all_vm_credentials(s: &AppState) -> ApiResult<()> {
 }
 
 #[derive(Deserialize)]
-struct SetGithubTokenRequest {
-    /// GitHub fine-grained PAT scoped to the repos lagrange's agents
-    /// should be able to push to. Stored under the admin service's
-    /// state dir and staged per-VM as GITHUB_TOKEN / GH_TOKEN env vars.
+struct SetGithubAccountTokenRequest {
+    /// GitHub fine-grained PAT. Scope it to the repos lagrange's agents
+    /// should be able to push to. Stored at
+    /// state_dir/github-accounts/<alias> with mode 0640.
     token: String,
 }
 
-async fn get_github_token(State(s): State<AppState>) -> ApiResult<Json<github_token::Status>> {
-    Ok(Json(github_token::status(s.settings.clone()).await?))
-}
-
-async fn set_github_token(
+async fn list_github_accounts(
     State(s): State<AppState>,
-    Json(body): Json<SetGithubTokenRequest>,
+) -> ApiResult<Json<Vec<github_accounts::Account>>> {
+    Ok(Json(github_accounts::list(&s.db, &s.settings).await?))
+}
+
+async fn upsert_github_account(
+    State(s): State<AppState>,
+    Path(alias): Path<String>,
+    Json(body): Json<SetGithubAccountTokenRequest>,
 ) -> ApiResult<StatusCode> {
-    github_token::set(&s.settings, &body.token).await?;
-    restage_all_vm_github_tokens(&s).await?;
-    // The repo-list endpoint caches by token; a new token may have
-    // different visibility so blow the cache.
-    github_repos::invalidate_cache();
-    tracing::info!("github-token set; restaged all VM env files");
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn delete_github_token(State(s): State<AppState>) -> ApiResult<StatusCode> {
-    github_token::clear(&s.settings).await?;
-    restage_all_vm_github_tokens(&s).await?;
-    github_repos::invalidate_cache();
-    tracing::info!("github-token cleared; removed per-VM env files");
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn restage_all_vm_github_tokens(s: &AppState) -> ApiResult<()> {
-    let vms = db::list_vms(&s.db).await?;
-    for v in vms {
-        github_token::stage_for_vm(&s.settings, &v.name).await?;
+    github_accounts::upsert(&s.db, &s.settings, &alias, &body.token).await?;
+    // Restage gh.env for every VM that points at this alias — running
+    // guests will pick the new value up on next restart.
+    for vm_name in db::vms_using_account(&s.db, &alias).await? {
+        if let Err(e) = vm::stage_github_for_vm(&s.settings, &vm_name, Some(&alias)).await {
+            tracing::warn!(vm = %vm_name, alias = %alias, error = %e, "restage gh.env failed");
+        }
     }
-    Ok(())
+    github_repos::invalidate_cache();
+    tracing::info!(alias = %alias, "github-account upserted");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_github_account(
+    State(s): State<AppState>,
+    Path(alias): Path<String>,
+) -> ApiResult<StatusCode> {
+    // Pull the list of dependent VMs BEFORE delete; ON DELETE SET NULL
+    // will clear github_account on them, after which we restage their
+    // gh.env to remove the now-stale token file.
+    let dependents = db::vms_using_account(&s.db, &alias).await?;
+    github_accounts::delete(&s.db, &s.settings, &alias).await?;
+    for vm_name in dependents {
+        if let Err(e) = vm::stage_github_for_vm(&s.settings, &vm_name, None).await {
+            tracing::warn!(vm = %vm_name, error = %e, "clear gh.env after account delete failed");
+        }
+    }
+    github_repos::invalidate_cache();
+    tracing::info!(alias = %alias, "github-account deleted");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct SetVmGithubAccountRequest {
+    /// `null` clears the assignment (gh.env removed, no GITHUB_TOKEN
+    /// for that vessel).
+    account: Option<String>,
+}
+
+async fn set_vm_github_account(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<SetVmGithubAccountRequest>,
+) -> ApiResult<StatusCode> {
+    if let Some(ref alias) = body.account {
+        if !github_accounts::exists(&s.db, alias).await? {
+            return Err(ApiError::BadRequest(format!(
+                "github_account '{}' does not exist",
+                alias
+            )));
+        }
+    }
+    let updated = db::set_github_account(&s.db, &name, body.account.as_deref()).await?;
+    if !updated {
+        return Err(ApiError::NotFound(name));
+    }
+    if let Err(e) = vm::stage_github_for_vm(&s.settings, &name, body.account.as_deref()).await {
+        tracing::warn!(vm = %name, error = %e, "restage gh.env failed");
+    }
+    tracing::info!(vm = %name, account = ?body.account, "vm github-account updated");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]

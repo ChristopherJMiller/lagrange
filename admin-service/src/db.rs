@@ -23,6 +23,7 @@ pub struct RepoVm {
     pub claude_session_name: Option<String>,
     pub claude_session_url: Option<String>,
     pub permission_mode: String,
+    pub github_account: Option<String>,
 }
 
 pub async fn connect_and_migrate(path: &Path) -> anyhow::Result<SqlitePool> {
@@ -81,6 +82,7 @@ pub async fn allocate_and_insert(
     vcpu: i64,
     mem_mb: i64,
     permission_mode: &str,
+    github_account: Option<&str>,
 ) -> ApiResult<RepoVm> {
     let mut tx = pool.begin().await?;
     sqlx::query("BEGIN IMMEDIATE").execute(&mut *tx).await.ok();
@@ -98,8 +100,8 @@ pub async fn allocate_and_insert(
     sqlx::query(
         r#"
         INSERT INTO repo_vms
-          (name, repo_url, branch, vm_ip, vm_mac, vcpu, mem_mb, status, created_at, permission_mode)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+          (name, repo_url, branch, vm_ip, vm_mac, vcpu, mem_mb, status, created_at, permission_mode, github_account)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
         "#,
     )
     .bind(name)
@@ -112,6 +114,7 @@ pub async fn allocate_and_insert(
     .bind(VmStatus::Provisioning.as_str())
     .bind(now.to_rfc3339())
     .bind(permission_mode)
+    .bind(github_account)
     .execute(&mut *tx)
     .await
     .map_err(|e| {
@@ -251,6 +254,30 @@ mod tests {
     }
 }
 
+pub async fn set_github_account(
+    pool: &SqlitePool,
+    name: &str,
+    account: Option<&str>,
+) -> ApiResult<bool> {
+    let n = sqlx::query("UPDATE repo_vms SET github_account = ?1 WHERE name = ?2")
+        .bind(account)
+        .bind(name)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    Ok(n > 0)
+}
+
+pub async fn vms_using_account(pool: &SqlitePool, alias: &str) -> ApiResult<Vec<String>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT name FROM repo_vms WHERE github_account = ?1 ORDER BY name",
+    )
+    .bind(alias)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(n,)| n).collect())
+}
+
 pub async fn delete_vm(pool: &SqlitePool, name: &str) -> ApiResult<()> {
     sqlx::query("DELETE FROM repo_vms WHERE name = ?1")
         .bind(name)
@@ -305,6 +332,7 @@ fn row_to_vm(row: sqlx::sqlite::SqliteRow) -> RepoVm {
         permission_mode: row
             .try_get::<String, _>("permission_mode")
             .unwrap_or_else(|_| "auto".to_string()),
+        github_account: row.try_get("github_account").ok(),
     }
 }
 

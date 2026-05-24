@@ -1,5 +1,11 @@
 import { create } from 'zustand'
-import type { CapacityDto, CredStatus, HealthDto, VmDto } from '../api/types'
+import type {
+  CapacityDto,
+  CredStatus,
+  GithubAccount,
+  HealthDto,
+  VmDto,
+} from '../api/types'
 
 export type CredKind = 'credentials' | 'github'
 
@@ -15,7 +21,8 @@ type UiState = {
 
   health: HealthDto | null
   capacity: CapacityDto | null
-  creds: Record<CredKind, CredStatus | null>
+  credentials: CredStatus | null
+  githubAccounts: GithubAccount[] | null
 
   // optimistic in-flight per-VM actions
   busy: Record<string, 'start' | 'stop' | 'restart' | 'destroy' | undefined>
@@ -35,7 +42,8 @@ type UiState = {
   setVmsError: (err: string | null) => void
   setHealth: (h: HealthDto | null) => void
   setCapacity: (c: CapacityDto | null) => void
-  setCred: (kind: CredKind, v: CredStatus | null) => void
+  setCredentials: (v: CredStatus | null) => void
+  setGithubAccounts: (a: GithubAccount[] | null) => void
   markInitialLoaded: () => void
   setLastFetched: (ts: number) => void
   setBusy: (name: string, kind: UiState['busy'][string]) => void
@@ -63,7 +71,8 @@ export const useUi = create<UiState>((set) => ({
 
   health: null,
   capacity: null,
-  creds: { credentials: null, github: null },
+  credentials: null,
+  githubAccounts: null,
 
   busy: {},
 
@@ -80,8 +89,8 @@ export const useUi = create<UiState>((set) => ({
   setVmsError: (err) => set({ vmsError: err }),
   setHealth: (h) => set({ health: h }),
   setCapacity: (c) => set({ capacity: c }),
-  setCred: (kind, v) =>
-    set((s) => ({ creds: { ...s.creds, [kind]: v } })),
+  setCredentials: (v) => set({ credentials: v }),
+  setGithubAccounts: (a) => set({ githubAccounts: a }),
   markInitialLoaded: () => set({ initialLoad: false }),
   setLastFetched: (ts) => set({ lastFetched: ts }),
   setBusy: (name, kind) =>
