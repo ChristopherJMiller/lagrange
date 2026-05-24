@@ -6,8 +6,11 @@ WORKDIR /app
 
 # install deps first for layer caching
 COPY package.json pnpm-lock.yaml* package-lock.json* ./
+# Pin pnpm to v9 to match the lockfile (the nix devShell uses pnpm_9).
+# pnpm 10 changed --frozen-lockfile semantics around ignored-build-scripts
+# and rejects installs whose lockfile was emitted by 9.x.
 RUN if [ -f pnpm-lock.yaml ]; then \
-      npm install -g pnpm && pnpm install --frozen-lockfile; \
+      npm install -g pnpm@9 && pnpm install --frozen-lockfile; \
     elif [ -f package-lock.json ]; then \
       npm ci; \
     else \
