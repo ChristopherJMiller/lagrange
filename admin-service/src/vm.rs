@@ -280,12 +280,18 @@ pub async fn microvm_create_and_start(settings: &Settings, name: &str) -> ApiRes
     let flake_ref = flake_path.display().to_string();
 
     run_cmd("microvm", &["-c", name, "-f", &flake_ref]).await?;
-    // Enable BEFORE start so a crash between the two doesn't strand the VM
-    // in a "running but not enabled" state — the next host reboot would
-    // otherwise lose it silently. systemctl enable on a template instance
-    // adds a wants link to microvms.target, which the host module pulls
-    // up at boot.
-    run_cmd("systemctl", &["enable", &format!("microvm@{}", name)]).await?;
+    // NOTE: do NOT call `systemctl enable microvm@<name>` here.
+    //   1. polkit doesn't pass a `unit` detail for EnableUnitFiles, so our
+    //      rule that scopes manage-unit-files to microvm@* can't match,
+    //      and the call dies with "interactive authentication required"
+    //   2. enable on NixOS writes into /etc/systemd/system/...wants/,
+    //      which the next comin activation rewrites — so persistence
+    //      wouldn't survive a reconcile anyway
+    // The autostart property is provided instead by reconcile_autostart()
+    // running in the admin service at startup: it walks the DB and
+    // systemctl-starts every VM whose recorded status is "running" but
+    // whose runtime isn't active. systemctl start uses manage-units,
+    // which our existing polkit rule does cover.
     run_cmd("systemctl", &["start", &format!("microvm@{}", name)]).await?;
     Ok(())
 }
@@ -310,10 +316,9 @@ pub async fn microvm_status(name: &str) -> ApiResult<String> {
 
 pub async fn microvm_destroy(name: &str) -> ApiResult<()> {
     let _ = microvm_stop(name).await;
-    // Disable to remove the microvms.target wants link; without this the
-    // unit definition would linger and systemd would warn about a dangling
-    // symlink on next reload.
-    let _ = run_cmd("systemctl", &["disable", &format!("microvm@{}", name)]).await;
+    // No `systemctl disable` — see comment in microvm_create_and_start.
+    // microvm -d removes the per-VM dir; without an enable symlink there's
+    // nothing for systemd to garbage-collect.
     run_cmd("microvm", &["-d", name]).await
 }
 
@@ -339,6 +344,58 @@ pub async fn vm_journal_tail(name: &str, lines: u32) -> ApiResult<String> {
         )));
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// At admin-service startup, bring every VM with status='running' back
+/// to actually-running. Survives host reboots without needing
+/// `systemctl enable` per instance (which polkit rejects for our
+/// service user, and which NixOS would clobber on the next activation
+/// anyway).
+///
+/// Skips:
+///   - VMs whose status isn't 'running' (operator explicitly stopped)
+///   - VMs whose runtime is already active
+///   - VMs whose /var/lib/microvms/<name> dir doesn't exist (the unit
+///     would fail to start with no useful information; the operator
+///     should rebuild it via POST /v1/repos/<name>/start which
+///     re-runs `microvm -c` if needed)
+pub async fn reconcile_autostart(pool: &sqlx::SqlitePool, settings: &Settings) {
+    let vms = match crate::db::list_vms(pool).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = ?e, "autostart: list_vms failed");
+            return;
+        }
+    };
+    let mut started = 0u32;
+    let mut skipped = 0u32;
+    for vm in vms {
+        if vm.status != "running" {
+            skipped += 1;
+            continue;
+        }
+        let active = microvm_status(&vm.name).await.unwrap_or_default() == "active";
+        if active {
+            skipped += 1;
+            continue;
+        }
+        let dir = settings.microvm_dir.join(&vm.name);
+        if !dir.exists() {
+            tracing::warn!(
+                vm = %vm.name,
+                "autostart: /var/lib/microvms/<name> missing; skipping (operator must redeploy)"
+            );
+            skipped += 1;
+            continue;
+        }
+        tracing::info!(vm = %vm.name, "autostart: starting");
+        if let Err(e) = run_cmd("systemctl", &["start", &format!("microvm@{}", vm.name)]).await {
+            tracing::error!(vm = %vm.name, error = %e, "autostart: start failed");
+        } else {
+            started += 1;
+        }
+    }
+    tracing::info!(started, skipped, "autostart reconcile complete");
 }
 
 /// Run a privileged-on-host command directly. systemctl actions on

@@ -186,16 +186,19 @@ in
     # bus. polkit is the privilege gate that used to be sudo — narrower
     # (per-action, per-unit-glob) and lets us keep NoNewPrivileges=true.
     #
-    # Two action IDs needed:
-    #   manage-units      — start/stop/restart instances
-    #   manage-unit-files — enable/disable instances (so VMs survive a
-    #                       host reboot via microvms.target.wants)
+    # Scoped to manage-units (start/stop/restart). manage-unit-files
+    # (enable/disable) is NOT granted because:
+    #   1. systemd doesn't pass a `unit` detail to polkit for the
+    #      EnableUnitFiles bulk method, so a per-unit-glob rule can't
+    #      target microvm@* anyway
+    #   2. NixOS rewrites /etc/systemd/system/...wants/ on every
+    #      activation, so a runtime enable doesn't survive comin
+    # Autostart-on-boot is handled by the admin service calling
+    # reconcile_autostart() at startup instead (see vm.rs).
     security.polkit.enable = true;
     security.polkit.extraConfig = ''
       polkit.addRule(function(action, subject) {
-        var allowed = action.id === "org.freedesktop.systemd1.manage-units"
-                   || action.id === "org.freedesktop.systemd1.manage-unit-files";
-        if (!allowed) return;
+        if (action.id !== "org.freedesktop.systemd1.manage-units") return;
         if (!subject.isInGroup("kvm")) return;
         var unit = action.lookup("unit") || "";
         if (unit.indexOf("microvm@") === 0) {

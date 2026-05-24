@@ -74,6 +74,16 @@ async fn run_server(settings: Settings) -> anyhow::Result<()> {
         tracing::error!(error = ?e, "legacy github-token migration failed");
     }
 
+    // Bring previously-running vessels back up after a host reboot. We
+    // intentionally do this in a background task so the HTTP listener
+    // starts immediately — the orbit UI shouldn't wait on N systemctl
+    // start calls for the API to be reachable.
+    {
+        let pool = pool.clone();
+        let settings = settings.clone();
+        tokio::spawn(async move { vm::reconcile_autostart(&pool, &settings).await });
+    }
+
     let app_state = state::AppState::new(settings.clone(), pool);
     let token = std::fs::read_to_string(&settings.token_file)
         .with_context(|| format!("read bearer token from {}", settings.token_file.display()))?
