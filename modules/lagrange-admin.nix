@@ -133,6 +133,7 @@ in
     # operator who's in kvm) to manage microvm@*.service over the system
     # bus. polkit is the privilege gate that used to be sudo — narrower
     # (per-action, per-unit-glob) and lets us keep NoNewPrivileges=true.
+    security.polkit.enable = true;
     security.polkit.extraConfig = ''
       polkit.addRule(function(action, subject) {
         if (action.id !== "org.freedesktop.systemd1.manage-units") return;
