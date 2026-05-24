@@ -256,21 +256,24 @@ nixpkgs.lib.nixosSystem {
               GIT_SSH_COMMAND="ssh -i /home/agent/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new" \
                 ${pkgs.git}/bin/git clone --branch ${repoArgs.branch} ${repoArgs.repoUrl} .
             fi
-            # `claude remote-control` (subcommand, no `--`) is server
-            # mode — no local prompt, the terminal just registers a
-            # session and waits for remote connections from claude.ai/code.
-            # That's what we want for a headless microvm. The undocumented
-            # subcommand is the same one anthropics/claude-code#28038 asks
-            # for docs about; we know it exists from blog write-ups.
-            # --permission-mode auto: classifier-mediated approval.
-            # --add-dir: trust /home/agent/work explicitly so claude
-            # doesn't block waiting on a workspace-trust dialog.
-            # script -q writes a typescript of the TUI to /tmp so
-            # operators can read the session URL/QR code claude prints
-            # on startup (the systemd journal sees `[NNB blob data]`
-            # lines because the output is terminal escape sequences).
+            # `claude remote-control` (subcommand) — server mode. Per
+            # Anthropic's docs at /en/remote-control, this registers a
+            # session with claude.ai/code that the operator drives from
+            # the web/mobile sidebar. Flags:
+            #   --name           session title shown in claude.ai/code
+            #   --spawn session  single-session mode (one VM = one session)
+            #   --permission-mode auto   classifier-mediated approval
+            #   --add-dir        pre-trust the workspace
+            #   --verbose        surface registration errors (see
+            #                     troubleshooting in the docs)
+            #
+            # script(1) captures the TUI (full of terminal escapes) to a
+            # typescript file so an operator who ssh's in can read the
+            # session URL/QR code claude prints on startup. The systemd
+            # journal only sees `[NNB blob data]` lines for the same
+            # output, which isn't useful.
             exec ${pkgs.util-linux}/bin/script -q \
-              -c "${pkgs.claude-code}/bin/claude remote-control --permission-mode auto --add-dir /home/agent/work" \
+              -c "${pkgs.claude-code}/bin/claude remote-control --name ${repoArgs.name} --spawn session --permission-mode auto --add-dir /home/agent/work --verbose" \
               /tmp/claude-remote.typescript
           '';
           Restart = "on-failure";
