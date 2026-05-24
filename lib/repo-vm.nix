@@ -280,8 +280,12 @@ nixpkgs.lib.nixosSystem {
             # --sandbox — those are top-level claude flags only.
             # Default --spawn is `same-dir`, which pre-creates one session
             # in /home/agent/work and stays up across reconnects.
+            # --spawn same-dir is the default mode AND skips the first-run
+            # interactive prompt ("Pick same-dir or worktree"). Without
+            # this flag, claude blocks indefinitely waiting on keyboard
+            # input that never comes.
             exec ${pkgs.util-linux}/bin/script -q \
-              -c "${pkgs.claude-code}/bin/claude remote-control --name ${repoArgs.name} --permission-mode auto --verbose" \
+              -c "${pkgs.claude-code}/bin/claude remote-control --name ${repoArgs.name} --spawn same-dir --permission-mode auto --verbose" \
               /tmp/claude-remote.typescript
           '';
           Restart = "on-failure";
