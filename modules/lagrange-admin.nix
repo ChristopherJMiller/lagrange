@@ -209,6 +209,12 @@ in
           cfg.stateDir
           cfg.agentStateRoot
           cfg.microvmStateDir
+          # microvm -c creates per-VM GC roots at
+          # /nix/var/nix/gcroots/microvm/<name> to keep the built closure
+          # alive across nix-store --gc. ProtectSystem=strict makes
+          # /nix/var read-only by default; grant write to the gcroots
+          # subtree (not /nix/store, which we still want immutable).
+          "/nix/var/nix/gcroots"
         ];
       };
     };
