@@ -30,9 +30,20 @@ jobs:
 
       - name: Evaluate flake outputs
         run: |
+          # `nix flake show --json` walks the full attr tree, which is
+          # enough to catch syntax + missing-binding errors at every
+          # output (devShells, packages, nixosConfigurations, checks,
+          # …) — same coverage we want from eval. We used to also call
+          #   nix eval .#nixosConfigurations.<host>.config.system.build.toplevel.drvPath
+          # but that path is rejected by current Nix with
+          #   "string has a context which refers to a complete source
+          #    and binary closure. This is not supported at this time"
+          # and segfaults on the ubuntu runner before erroring cleanly.
+          # `nix build .#nixosConfigurations.<host>.config.system.build.toplevel`
+          # works (and is what comin does on the satellite) but realises
+          # the full closure in CI for no extra signal. nix flake check
+          # below runs the actual checks we care about.
           nix flake show --json > /dev/null
-          nix eval .#nixosConfigurations.lagrange.config.system.build.toplevel.drvPath
-          nix eval .#nixosConfigurations.installer.config.system.build.toplevel.drvPath
 
       - name: Build admin service
         run: nix build .#lagrange-admin -L
