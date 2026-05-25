@@ -40,27 +40,33 @@ use host-side caching proxies (see below).
 
 ## Package caches
 
-All package managers are pre-configured to route through `cache.internal`:
+Most package managers are pre-configured to route through `cache.internal`
+(host-side pull-through proxies). They are fast and warm — prefer them
+over hitting public registries directly.
 
 | Tool             | Endpoint                                              |
 |------------------|-------------------------------------------------------|
-| Nix substituter  | `http://cache.internal:8080/lagrange`                 |
 | npm registry     | `http://cache.internal:4873/`                         |
 | Go proxy         | `http://cache.internal:3000` (then `direct`)          |
 | PyPI index       | `http://cache.internal:3141/root/pypi/+simple/`       |
 | Cargo            | sparse `http://cache.internal:7878/index/` (via cargo config) |
 | Docker registry  | `http://cache.internal:5000` (pull-through)           |
 
-If a fetch fails with a connection error to a public registry, that is
-expected — the VM has restricted egress. Use the proxies; do not work around
-them. See the `cache-debug` skill.
+Nix is the exception: the substituter is plain `cache.nixos.org` (the
+default), not the local attic cache. The lagrange attic instance
+requires a bearer token we haven't plumbed into guests yet, so leaving
+it unconfigured avoids silent 401s. See the `## Nix` section below.
+
+If a proxy endpoint fails, fall back to the public registry — that is
+allowed, not blocked. The proxies are a performance optimization, not a
+security boundary. (Host nftables, not the guest, decides egress.)
 
 ## Network
 
-- You can reach the public internet for things the agent needs (GitHub, the
-  Anthropic API, etc.).
-- You **cannot** reach other VMs or the host's internal services beyond the
-  cache layer.
+- You can reach the public internet (GitHub, the Anthropic API, npmjs,
+  pypi, cache.nixos.org, etc.). Egress is open at the host level.
+- You **cannot** reach other VMs on the cache bridge, and you cannot
+  reach host services other than the cache layer listed above.
 - `git push` works. Use it.
 
 ## Session hygiene

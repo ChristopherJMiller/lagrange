@@ -57,6 +57,15 @@ in
   # and `nix-shell -p` constantly — all of those need the flag.
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
+  # Don't ship the legacy `nix-channel` infrastructure. We never `nix-channel
+  # --add`, but its presence leaves `/nix/var/nix/profiles/per-user/root/
+  # channels` in the default NIX_PATH; on a fresh VM the dir doesn't exist
+  # and every `nix-shell -p foo` invocation prints
+  #   warning: Nix search path entry '…/channels' does not exist, ignoring
+  # before doing the work. Turning channels off drops the entry from
+  # NIX_PATH; the flake-pinned nixpkgs is what the agent actually uses.
+  nix.channel.enable = false;
+
   environment.systemPackages = with pkgs; [
     claude-code
     git
