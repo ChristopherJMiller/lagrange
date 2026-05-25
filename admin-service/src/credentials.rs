@@ -44,18 +44,31 @@ pub struct Status {
     pub present: bool,
     pub set_at: Option<DateTime<Utc>>,
     /// claudeAiOauth.expiresAt parsed out of the staged credentials.json.
-    /// None when the file is absent or doesn't have the expected shape.
+    /// None when the file is absent or unreadable. When the file is
+    /// present but malformed, `expired` is true and `format_problem`
+    /// carries the reason — we report that as expired so orbit's UX
+    /// (and the deploy gate) treats it the same as a hard expiry.
     /// Claude refreshes the access token in place periodically (the
     /// bundle has a long-lived refreshToken), but the refresh writes
     /// land in the per-VM /persistent copy — the global staged file
     /// here goes stale on a ~24h cycle unless the operator re-stages
     /// after running `claude auth login`.
     pub expires_at: Option<DateTime<Utc>>,
-    /// Convenience: expires_at < now. New repo-VMs can't register a
-    /// Remote Control session with an expired access token — the
-    /// registration itself fails with 401 before claude has a chance
-    /// to refresh. The API gates POST /v1/repos on this.
+    /// True when present-but-unusable: expired access token OR the
+    /// file no longer matches the shape we expect (missing
+    /// claudeAiOauth.accessToken, missing/non-numeric expiresAt, not
+    /// JSON at all, …). New repo-VMs can't register a Remote Control
+    /// session in either case — the registration itself fails with
+    /// 401 before claude has a chance to refresh. The API gates
+    /// POST /v1/repos on `!expired`.
     pub expired: bool,
+    /// When the file is present but doesn't parse into a usable
+    /// bundle, a short human-readable reason (e.g. "missing
+    /// claudeAiOauth.expiresAt"). None when the file is absent or
+    /// parses cleanly. Surfaced in orbit so the operator knows the
+    /// file is there but stale/wrong, not just "expired".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format_problem: Option<String>,
 }
 
 pub fn host_creds_path(s: &Settings) -> PathBuf {
@@ -78,13 +91,17 @@ pub async fn status(s: Arc<Settings>) -> ApiResult<Status> {
     let install_md = tokio::fs::metadata(&host_install_path(&s)).await;
     match (creds_md, install_md) {
         (Ok(c), Ok(_)) => {
-            let expires_at = parse_expiry(&host_creds_path(&s)).await;
-            let expired = expires_at.map(|t| t < Utc::now()).unwrap_or(false);
+            let parsed = parse_bundle(&host_creds_path(&s)).await;
+            let (expires_at, expired, format_problem) = match parsed {
+                Ok(t) => (Some(t), t < Utc::now(), None),
+                Err(reason) => (None, true, Some(reason)),
+            };
             Ok(Status {
                 present: true,
                 set_at: c.modified().ok().map(DateTime::<Utc>::from),
                 expires_at,
                 expired,
+                format_problem,
             })
         }
         _ => Ok(Status {
@@ -92,34 +109,58 @@ pub async fn status(s: Arc<Settings>) -> ApiResult<Status> {
             set_at: None,
             expires_at: None,
             expired: false,
+            format_problem: None,
         }),
     }
 }
 
-/// Pull `claudeAiOauth.expiresAt` (ms epoch) out of a credentials.json.
-/// Returns None on missing file, unreadable file, invalid JSON, or
-/// missing-field — none of those are errors worth surfacing to the
-/// operator; we just report "expiry unknown" and let claude itself
-/// fail loudly if the bundle is actually broken.
-pub async fn parse_expiry(path: &std::path::Path) -> Option<DateTime<Utc>> {
-    let bytes = tokio::fs::read(path).await.ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    let ms = v.get("claudeAiOauth")?.get("expiresAt")?.as_i64()?;
+/// Parse a credentials.json into its expiry timestamp, surfacing the
+/// specific reason on any deviation. Both the status endpoint and the
+/// deploy gate now treat a parse error the same as an explicit expiry
+/// — quietly returning None here is what produced the bug where a
+/// malformed bundle showed green in orbit and let create_repo through.
+pub async fn parse_bundle(path: &std::path::Path) -> Result<DateTime<Utc>, String> {
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("unreadable: {e}"))?;
+    if bytes.is_empty() {
+        return Err("file is empty".into());
+    }
+    let v: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("not valid JSON: {e}"))?;
+    let oauth = v
+        .get("claudeAiOauth")
+        .ok_or_else(|| "missing top-level `claudeAiOauth` (wrong file?)".to_string())?;
+    // accessToken is what claude actually presents at registration; an
+    // expiresAt without it isn't usable either way.
+    oauth
+        .get("accessToken")
+        .and_then(|t| t.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "missing claudeAiOauth.accessToken".to_string())?;
+    let ms = oauth
+        .get("expiresAt")
+        .ok_or_else(|| "missing claudeAiOauth.expiresAt".to_string())?
+        .as_i64()
+        .ok_or_else(|| "claudeAiOauth.expiresAt is not a number".to_string())?;
     let secs = ms / 1000;
     let nanos = ((ms % 1000) * 1_000_000) as u32;
     DateTime::<Utc>::from_timestamp(secs, nanos)
+        .ok_or_else(|| format!("claudeAiOauth.expiresAt out of range: {ms}"))
 }
 
 /// Are the currently-staged credentials usable for a fresh registration?
 /// Returns true when missing entirely (so create_repo can show the
-/// "stage credentials first" error elsewhere) and true when present +
-/// not expired. Returns false ONLY when present-but-expired.
+/// "stage credentials first" error elsewhere) and true when present
+/// AND parseable AND not expired. Returns false when present-but-
+/// unparseable too — a malformed bundle won't authenticate either,
+/// and silently letting it through is what produced the original
+/// "orbit says valid but VM start fails" bug.
 pub async fn is_usable_for_register(s: &Settings) -> ApiResult<bool> {
     if !host_creds_path(s).exists() {
         return Ok(true);
     }
-    let expires_at = parse_expiry(&host_creds_path(s)).await;
-    Ok(expires_at.map(|t| t > Utc::now()).unwrap_or(true))
+    Ok(matches!(parse_bundle(&host_creds_path(s)).await, Ok(t) if t > Utc::now()))
 }
 
 pub async fn set(s: &Settings, credentials_json: &str, claude_json: &str) -> ApiResult<()> {
@@ -368,6 +409,94 @@ mod tests {
             v["projects"]["/home/agent/work"]["hasTrustDialogAccepted"],
             serde_json::json!(true)
         );
+    }
+
+    #[tokio::test]
+    async fn malformed_credentials_block_deploy_with_specific_reason() {
+        // Regression: a file that's present but doesn't carry the
+        // claudeAiOauth shape used to silently pass `is_usable_for_register`
+        // (orbit showed green, the agent inside the VM then crashlooped on
+        // the registration 401). The strict parse should treat each
+        // deviation as expired + surface the reason in `format_problem`.
+        //
+        // Each case is JSON that passes set()'s syntactic validation but
+        // does not carry the bundle shape we need. (For the "file got
+        // truncated on disk" path see the next test, which writes raw
+        // bytes around set()'s validation.)
+        let s = TempDir::new().unwrap();
+        let a = TempDir::new().unwrap();
+        let cfg = test_settings(s.path(), a.path());
+
+        let cases = [
+            ("{}", "claudeAiOauth"),
+            (
+                r#"{"claudeAiOauth": {"expiresAt": 9999999999999}}"#,
+                "accessToken",
+            ),
+            (r#"{"claudeAiOauth": {"accessToken": "x"}}"#, "expiresAt"),
+            (
+                r#"{"claudeAiOauth": {"accessToken": "x", "expiresAt": "notanumber"}}"#,
+                "not a number",
+            ),
+        ];
+        for (body, expect_substring) in cases {
+            set(&cfg, body, "{}").await.unwrap();
+            assert!(
+                !is_usable_for_register(&cfg).await.unwrap(),
+                "is_usable_for_register accepted bogus body: {body}"
+            );
+            let st = status(Arc::new(cfg.clone())).await.unwrap();
+            assert!(st.present, "should still report present for {body}");
+            assert!(st.expired, "should report expired for {body}");
+            let reason = st
+                .format_problem
+                .as_deref()
+                .unwrap_or_else(|| panic!("no format_problem for {body}"));
+            assert!(
+                reason.contains(expect_substring),
+                "reason {reason:?} should mention {expect_substring:?} (body: {body})"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_bytes_corruption_blocks_deploy() {
+        // The on-disk file can get into states `set()` would have
+        // rejected (truncation, half-written file from an aborted
+        // restage, manual rm-then-touch). Test the path that bypasses
+        // set() and writes raw bytes — both an empty file and arbitrary
+        // non-JSON content must block deploys.
+        for body in ["", "not valid json"] {
+            let s = TempDir::new().unwrap();
+            let a = TempDir::new().unwrap();
+            let cfg = test_settings(s.path(), a.path());
+            // claude-install.json needs to be present for `status` to
+            // even look at the credentials file, mirror production.
+            std::fs::write(host_install_path(&cfg), "{}").unwrap();
+            std::fs::write(host_creds_path(&cfg), body).unwrap();
+            assert!(!is_usable_for_register(&cfg).await.unwrap(), "body: {body:?}");
+            let st = status(Arc::new(cfg.clone())).await.unwrap();
+            assert!(st.present);
+            assert!(st.expired);
+            assert!(st.format_problem.is_some(), "body: {body:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn well_formed_future_expiry_passes() {
+        let s = TempDir::new().unwrap();
+        let a = TempDir::new().unwrap();
+        let cfg = test_settings(s.path(), a.path());
+        let far_future = (Utc::now() + chrono::Duration::days(7)).timestamp_millis();
+        let body = format!(
+            r#"{{"claudeAiOauth": {{"accessToken": "abc", "expiresAt": {far_future}}}}}"#
+        );
+        set(&cfg, &body, "{}").await.unwrap();
+        assert!(is_usable_for_register(&cfg).await.unwrap());
+        let st = status(Arc::new(cfg.clone())).await.unwrap();
+        assert!(st.present);
+        assert!(!st.expired);
+        assert!(st.format_problem.is_none());
     }
 
     #[tokio::test]

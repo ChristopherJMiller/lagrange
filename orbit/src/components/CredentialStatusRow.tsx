@@ -18,14 +18,19 @@ export function CredentialStatusRow() {
   const credPresent = credentials?.present === true
   const credKnown = credentials !== null
   const credExpired = credentials?.expired === true
+  const credFormatProblem = credentials?.format_problem
   const accountsKnown = accounts !== null
   const presentAccounts = (accounts ?? []).filter((a) => a.present)
 
   // What's "missing": claude session unstaged, OR github has 0 accounts.
-  // Expired creds count too — they're staged but unusable for new deploys.
+  // Expired or malformed creds count too — they're staged but unusable.
+  // We distinguish "expired" (clean time-based) from "malformed" (wrong
+  // shape — most often a stale dump from a different claude version) so
+  // the operator's restage script gets the right framing.
   const missing: string[] = []
   if (credKnown && !credPresent) missing.push('claude session')
-  if (credPresent && credExpired) missing.push('claude session (expired)')
+  if (credPresent && credFormatProblem) missing.push('claude session (malformed)')
+  else if (credPresent && credExpired) missing.push('claude session (expired)')
   if (accountsKnown && presentAccounts.length === 0) missing.push('github account')
 
   return (
@@ -75,23 +80,29 @@ export function CredentialStatusRow() {
                         : 'text-dimmer',
                 )}
               >
-                {credExpired
-                  ? 'EXPIRED'
-                  : credPresent
-                    ? 'staged'
-                    : credKnown
-                      ? 'absent'
-                      : '—'}
+                {credFormatProblem
+                  ? 'MALFORMED'
+                  : credExpired
+                    ? 'EXPIRED'
+                    : credPresent
+                      ? 'staged'
+                      : credKnown
+                        ? 'absent'
+                        : '—'}
               </span>
             </div>
             <div className="mt-0.5 text-[10px] text-dim truncate">
-              full-scope login — required for Remote Control
+              {credFormatProblem
+                ? credFormatProblem
+                : 'full-scope login — required for Remote Control'}
             </div>
-            <ExpiryLine
-              setAt={credentials?.set_at ?? null}
-              expiresAt={credentials?.expires_at ?? null}
-              expired={credExpired}
-            />
+            {!credFormatProblem && (
+              <ExpiryLine
+                setAt={credentials?.set_at ?? null}
+                expiresAt={credentials?.expires_at ?? null}
+                expired={credExpired}
+              />
+            )}
           </div>
         </button>
 
@@ -167,7 +178,11 @@ export function CredentialStatusRow() {
                 credExpired ? 'text-red' : 'text-amber',
               )}
             >
-              {credExpired ? '! EXPIRED' : '! BRIEF'}
+              {credFormatProblem
+                ? '! MALFORMED'
+                : credExpired
+                  ? '! EXPIRED'
+                  : '! BRIEF'}
             </span>
             <span
               className={cn(
@@ -175,11 +190,13 @@ export function CredentialStatusRow() {
                 credExpired ? 'text-red/90' : 'text-amber/90',
               )}
             >
-              {credExpired
-                ? 'Claude session expired. New deploys are blocked. Restage from your laptop: scripts/restage-claude-credentials.sh'
-                : missing.length === 2
-                  ? 'No credentials staged. New vessels will register but will fail to authenticate.'
-                  : `Missing: ${missing.join(', ')}. Run the setup brief.`}
+              {credFormatProblem
+                ? `Claude credentials present but unreadable (${credFormatProblem}). New deploys are blocked. Restage from your laptop: scripts/restage-claude-credentials.sh`
+                : credExpired
+                  ? 'Claude session expired. New deploys are blocked. Restage from your laptop: scripts/restage-claude-credentials.sh'
+                  : missing.length === 2
+                    ? 'No credentials staged. New vessels will register but will fail to authenticate.'
+                    : `Missing: ${missing.join(', ')}. Run the setup brief.`}
             </span>
           </div>
           <Button variant="hero" size="sm" onClick={() => openWizard(true)}>

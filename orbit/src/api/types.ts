@@ -71,8 +71,15 @@ export type CredStatus = {
   set_at: string | null
   /** claudeAiOauth.expiresAt; only set for claude-credentials. */
   expires_at?: string | null
-  /** Convenience: expires_at < now. */
+  /** Convenience: expires_at < now OR format_problem present. */
   expired?: boolean
+  /**
+   * Present-but-unparseable reason: missing claudeAiOauth, no
+   * expiresAt, not JSON, etc. When set, `expired` is also true.
+   * Surfaced in the UI so the operator knows the file is there but
+   * unusable, not just "expired".
+   */
+  format_problem?: string
 }
 
 export type VersionInfo = {

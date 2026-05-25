@@ -245,11 +245,20 @@ async fn create_repo(
     // here with an actionable error than to deploy a VM that
     // crashloops with a confusing 401 in its journal.
     if !credentials::is_usable_for_register(&s.settings).await? {
-        return Err(ApiError::BadRequest(
-            "claude credentials have expired — re-stage from your laptop via \
+        // Include the specific reason (`format_problem`, expired) so
+        // the operator doesn't have to guess what's wrong. Previously
+        // a malformed bundle silently passed the gate and the VM
+        // crashlooped — the strict parse now blocks it, but only
+        // helps if we say WHY here.
+        let st = credentials::status(s.settings.clone()).await?;
+        let reason = st
+            .format_problem
+            .as_deref()
+            .unwrap_or("access token expired");
+        return Err(ApiError::BadRequest(format!(
+            "claude credentials unusable ({reason}) — re-stage from your laptop via \
              scripts/restage-claude-credentials.sh (after `claude auth login`)"
-                .into(),
-        ));
+        )));
     }
 
     // Serialize provisioning per-name so a concurrent DELETE/start can't race.
