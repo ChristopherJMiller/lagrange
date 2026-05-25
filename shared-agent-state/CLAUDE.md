@@ -97,24 +97,34 @@ complaining. "Sudo isn't working" is rarely the right diagnosis.
 
 ## Nix
 
-`nix-daemon` is enabled in this VM, so `nix develop`, `nix flake show`,
-`nix shell nixpkgs#<pkg>`, etc. work normally for the `agent` user.
+`nix-daemon` is enabled and the flakes / nix-command experimental
+features are on, so all of `nix develop`, `nix build`, `nix shell
+nixpkgs#<pkg>`, `nix-shell -p <pkg>`, and `nix flake show` work
+normally for the `agent` user.
 
-`/nix/store` is **virtiofs-mounted read-only** from the host. That means:
+`/nix/store` is virtiofs-mounted **read-only** from the host at
+`/nix/.ro-store`, then unioned with a tmpfs **writable overlay** at
+`/nix/.rw-store`. The merged view at `/nix/store` lets nix realise
+new derivations — writes land in the overlay (and disappear on VM
+reboot), reads come from whichever layer has them.
 
-- **Reads, evals, and entering existing devShells:** work normally.
-- **Building new derivations:** fails (can't write to /nix/store). If a
-  package isn't already in the store, `nix shell nixpkgs#<pkg>` will try
-  to build/substitute and may fail.
-- **Substituting from cache.internal:** works for packages the host has
-  already substituted. Adding new substituters from inside the VM won't
-  help — the daemon writes get rejected.
+Substituters: only the nixpkgs defaults (cache.nixos.org) are
+configured. The host's local attic cache is not currently wired in.
+For anything in nixpkgs, substitution works fine. For your own repo's
+flake outputs, the first build inside the VM has to compile from
+source — which is real work but won't fail.
 
-Practical consequence: if `nix shell nixpkgs#foo` errors with a write
-failure to /nix/store, either the host doesn't have `foo` available or
-the host's cache layer doesn't either. Add the package to the repo's
-`flake.nix` devShell instead so it gets built host-side on the next
-deploy, OR ask the operator to pre-warm the host.
+Things to keep in mind:
+
+- The overlay is tmpfs, so anything you build with `nix build` is gone
+  after a VM restart. Don't treat the guest store as durable build cache.
+- A `nix shell` that pulls down a multi-GB closure burns RAM (the
+  overlay shares the VM's memory). Prefer adding the package to the
+  repo's `flake.nix` devShell so the host realises it once and
+  virtiofs-shares it via `/nix/.ro-store`.
+- If the host hasn't substituted something you need and you're
+  building it from source repeatedly, ask the operator to add it to
+  this repo's devShell rather than fighting the overlay each time.
 
 ## When something feels wrong
 

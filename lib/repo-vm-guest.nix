@@ -45,11 +45,17 @@ in
   # microvm.nixosModules.microvm masks nix-daemon by default to keep
   # guest closures small — microvms aren't expected to evaluate nix.
   # Our guest IS a dev shell for an interactive agent that runs
-  # `nix develop`, `nix flake show`, etc., so unmask. /nix/store is
-  # still virtiofs-mounted read-only from the host, so building new
-  # derivations won't work — but evaluating, entering devShells with
-  # already-realized closures, and reading the store all do.
+  # `nix develop`, `nix flake show`, etc., so unmask. The microvm
+  # wrapper layers a writableStoreOverlay over the virtiofs-mounted
+  # /nix/.ro-store so the guest CAN realise new derivations (writes
+  # land in the tmpfs overlay; the host store stays read-only).
   nix.enable = lib.mkForce true;
+
+  # Without these, every modern nix invocation prints
+  # "error: experimental Nix feature 'nix-command' is disabled".
+  # The agent reaches for `nix develop`, `nix shell`, `nix flake`,
+  # and `nix-shell -p` constantly — all of those need the flag.
+  nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
   environment.systemPackages = with pkgs; [
     claude-code
@@ -208,6 +214,15 @@ in
         # agent user can't make files there). The subdir is
         # agent:users 0755 via the tmpfiles rule above.
         "GIT_CONFIG_GLOBAL=/persistent/git/config"
+        # Wire a usable PATH for shells the agent spawns via claude's
+        # Bash tool. Without this, the service inherits systemd's
+        # minimal default ($PATH = /usr/local/sbin:/usr/local/bin:
+        # /usr/sbin:/usr/bin:/sbin:/bin) — none of those exist on
+        # NixOS, so `nix`, `nix-shell`, `sudo`, and even `ls` come
+        # back as "command not found" from inside the agent. Order
+        # matters: wrappers first (for setuid sudo), then the system
+        # profile, then the user profiles.
+        "PATH=/run/wrappers/bin:/run/current-system/sw/bin:/home/agent/.nix-profile/bin:/etc/profiles/per-user/agent/bin"
       ];
       # Optional env files staged by the admin service. Leading `-`
       # makes each file optional so VMs whose corresponding host-side

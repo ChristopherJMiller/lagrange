@@ -84,6 +84,16 @@ nixpkgs.lib.nixosSystem {
         mem = repoArgs.memMb;
         balloon = true;
 
+        # Mount the virtiofs host /nix/store at /nix/.ro-store (read-only)
+        # and overlay a tmpfs at /nix/.rw-store, then union both at
+        # /nix/store. Without this, every write to /nix/store hits the
+        # read-only virtiofs mount and fails with EROFS — meaning the
+        # guest can't realise any new derivation, so `nix-shell`,
+        # `nix develop`, `nix build`, and anything that downloads from
+        # a substituter all break. The overlay is the standard pattern
+        # for read-only-host-store VMs (microvm.nix exposes it directly).
+        writableStoreOverlay = "/nix/.rw-store";
+
         shares = [
           # Read-only host /nix/store.
           {
@@ -157,12 +167,15 @@ nixpkgs.lib.nixosSystem {
         PIP_INDEX_URL = "http://cache.internal:3141/root/pypi/+simple/";
       };
 
-      nix.settings.substituters = [ "http://cache.internal:8080/lagrange" ];
-      nix.settings.trusted-public-keys = [
-        # Public key for the lagrange attic cache. Populated post-bootstrap;
-        # placeholder is deliberately invalid.
-        "lagrange:REPLACE_WITH_ATTIC_PUBLIC_KEY="
-      ];
+      # NOTE: the lagrange attic cache is intentionally NOT wired in here.
+      # atticd requires a bearer token per pull and we don't have a
+      # readable-without-auth mode set up yet — the previous attempt
+      # left a placeholder public key in `trusted-public-keys` and
+      # caused every `nix-shell` invocation to fail with HTTP 401 when
+      # nix tried the substituter first. Until the cache is either
+      # opened up or we plumb a token into the guest, fall back to
+      # nixpkgs' default substituters (cache.nixos.org), which is
+      # sufficient for everything in the standard library.
 
       # Cargo config: route through nginx HTTP cache on cache.internal:7878.
       environment.etc."skel/.cargo/config.toml".text = ''
