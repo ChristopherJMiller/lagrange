@@ -239,9 +239,12 @@ fn inject_workspace_trust(json: &str) -> ApiResult<String> {
             "host-staged claude-install.json is not valid JSON: {e}"
         ))
     })?;
-    let projects = v
+    let root = v
         .as_object_mut()
-        .ok_or_else(|| ApiError::Other(anyhow::anyhow!("claude-install.json root is not object")))?
+        .ok_or_else(|| ApiError::Other(anyhow::anyhow!("claude-install.json root is not object")))?;
+
+    // hasTrustDialogAccepted for /home/agent/work
+    let projects = root
         .entry("projects")
         .or_insert_with(|| serde_json::json!({}));
     let projects_obj = projects.as_object_mut().ok_or_else(|| {
@@ -255,6 +258,27 @@ fn inject_workspace_trust(json: &str) -> ApiResult<String> {
     if let Some(entry_obj) = entry.as_object_mut() {
         entry_obj.insert("hasTrustDialogAccepted".into(), serde_json::json!(true));
     }
+
+    // mcpServers.github — stdio MCP server, on PATH from the guest's
+    // systemPackages. Auth is via env inherited from claude-remote
+    // (GITHUB_PERSONAL_ACCESS_TOKEN, written by stage_github_for_vm
+    // into /persistent/gh.env). We replace any existing `github`
+    // entry the operator's laptop may have had, because the laptop's
+    // version probably uses a docker invocation or a token they
+    // don't want leaking into a remote vessel.
+    let mcp_servers = root
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(mcp_obj) = mcp_servers.as_object_mut() {
+        mcp_obj.insert(
+            "github".into(),
+            serde_json::json!({
+                "command": "github-mcp-server",
+                "args": ["stdio"],
+            }),
+        );
+    }
+
     Ok(serde_json::to_string(&v)
         .map_err(|e| ApiError::Other(anyhow::anyhow!("serialize patched claude-install.json: {e}")))?)
 }
@@ -392,6 +416,36 @@ mod tests {
             v["projects"]["/home/agent/work"]["hasTrustDialogAccepted"],
             serde_json::json!(true)
         );
+    }
+
+    #[test]
+    fn inject_workspace_trust_adds_github_mcp_server() {
+        // mcpServers.github should be present after injection so the
+        // agent can use the GitHub MCP server without any per-agent
+        // setup. Replaces any existing "github" entry (the laptop's
+        // version likely uses docker / has a token literal we don't
+        // want).
+        let input = serde_json::json!({
+            "mcpServers": {
+                "github": { "command": "docker", "args": ["run", "..."] },
+                "linear": { "command": "linear-mcp" }
+            }
+        })
+        .to_string();
+        let patched = inject_workspace_trust(&input).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&patched).unwrap();
+        assert_eq!(v["mcpServers"]["github"]["command"], "github-mcp-server");
+        assert_eq!(v["mcpServers"]["github"]["args"], serde_json::json!(["stdio"]));
+        // Other MCP servers the operator configured locally are
+        // preserved — only `github` is replaced.
+        assert_eq!(v["mcpServers"]["linear"]["command"], "linear-mcp");
+    }
+
+    #[test]
+    fn inject_workspace_trust_creates_mcp_servers_when_absent() {
+        let patched = inject_workspace_trust("{}").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&patched).unwrap();
+        assert_eq!(v["mcpServers"]["github"]["command"], "github-mcp-server");
     }
 
     #[test]

@@ -90,6 +90,17 @@ in
     curl       # already available via path on claude-remote, but
                # also drop into PATH for interactive shell sessions
     openssl    # cert poking, JWT inspection, etc.
+
+    # GitHub MCP server (stdio). claude-remote.service has it on PATH
+    # so the agent's mcpServers.github config (injected into the
+    # staged .claude.json by the admin service) can spawn it without
+    # an absolute path. Auth is via inherited env —
+    # GITHUB_PERSONAL_ACCESS_TOKEN is written into /persistent/gh.env
+    # alongside GITHUB_TOKEN by `stage_github_for_vm`. When the VM
+    # has no github account, the env var is absent and the server
+    # advertises an error to claude on the first tool call; the
+    # config is otherwise harmless.
+    github-mcp-server
   ];
 
   ###### Agent user (passwordless sudo; blast radius is the VM)

@@ -235,7 +235,17 @@ pub async fn stage_github_for_vm(
     };
     match token {
         Some(tok) => {
-            let body = format!("GITHUB_TOKEN={tok}\nGH_TOKEN={tok}\n");
+            // Three env names for the same secret:
+            //   GITHUB_TOKEN, GH_TOKEN — what `git`, `gh`, and the
+            //     credential helper read.
+            //   GITHUB_PERSONAL_ACCESS_TOKEN — what github-mcp-server
+            //     reads. Spawned as a stdio MCP child by claude, it
+            //     inherits claude-remote.service's env (which loads
+            //     this file via EnvironmentFile=); no separate
+            //     `env` block in the mcpServers config needed.
+            let body = format!(
+                "GITHUB_TOKEN={tok}\nGH_TOKEN={tok}\nGITHUB_PERSONAL_ACCESS_TOKEN={tok}\n"
+            );
             tokio::fs::create_dir_all(
                 env_path
                     .parent()

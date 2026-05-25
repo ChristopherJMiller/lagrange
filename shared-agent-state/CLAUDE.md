@@ -69,6 +69,21 @@ security boundary. (Host nftables, not the guest, decides egress.)
   reach host services other than the cache layer listed above.
 - `git push` works. Use it.
 
+## MCP servers
+
+The host pre-configures these MCP servers in `~/.claude.json`:
+
+- **`github`** — official `github-mcp-server` (stdio). Backed by the
+  GitHub PAT assigned to this vessel (the same one `git push` uses).
+  Use it for richer GitHub operations than `gh` covers ergonomically:
+  searching across PRs, reading issues with comments, walking org
+  membership, etc. Auth is automatic; no token in your config.
+
+If your vessel has no GitHub account assigned, the `github` MCP
+server is still wired up but its tools will fail with an auth error
+on first invocation. That's a configuration issue at the host —
+re-run the credential brief in orbit to assign an account.
+
 ## Session hygiene
 
 - This session may run for a long time. Compaction will happen even with the
