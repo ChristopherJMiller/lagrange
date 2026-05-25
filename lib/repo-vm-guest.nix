@@ -93,11 +93,13 @@ in
     "d /home/agent/.claude/statsig    0755 agent users -"
     "d /home/agent/.ssh               0700 agent users -"
 
-    # Bind-mount targets for the full-scope Claude Code credentials.
-    # systemd-mount needs the target file to exist before it can be
-    # bind-replaced; pre-create as 0600 owned by agent.
-    "f /home/agent/.claude/.credentials.json 0600 agent users -"
-    "f /home/agent/.claude.json              0600 agent users -"
+    # NOTE: NO tmpfiles `f` rules for ~/.claude/.credentials.json or
+    # ~/.claude.json. They used to be bind-mount targets, but that
+    # made claude's oauth-refresh writes fail with EBUSY (atomic
+    # rename refused on bind-mounted single files) and the access
+    # token would silently expire every ~24h. Replaced with an
+    # ExecStartPre copy from /persistent/* and a periodic sync back
+    # (claude-credentials-sync.timer below).
 
     "d /persistent/projects 0755 agent users -"
     "d /persistent/todos    0755 agent users -"
@@ -141,8 +143,13 @@ in
       # claude-remote service Environment so git treats the persistent
       # file as "global" and writes to it directly — rename works
       # because there's no mount in the way.
-      "/home/agent/.claude/.credentials.json" = "credentials.json";
-      "/home/agent/.claude.json" = "claude.json";
+      #
+      # Same reason for .credentials.json / .claude.json: claude does
+      # atomic-rename when it refreshes the oauth token, which fails
+      # on bind-mounted single files. Those files live as real
+      # writable files in /home/agent now, seeded from /persistent
+      # by ExecStartPre on claude-remote and synced back by
+      # claude-credentials-sync.timer.
     };
 
   ###### claude remote-control session
@@ -189,6 +196,29 @@ in
       #   agent.env  — CLAUDE_CODE_OAUTH_TOKEN (inference-only token)
       #   gh.env     — GITHUB_TOKEN / GH_TOKEN for `git push`
       EnvironmentFile = [ "-/persistent/agent.env" "-/persistent/gh.env" ];
+
+      # Seed (or refresh from) /persistent's authoritative copy of
+      # the operator's claude session. We don't bind-mount these
+      # single files because claude does atomic-rename when it
+      # refreshes the oauth access token, which fails with EBUSY on
+      # a bind-mount. Instead: copy in here, let claude refresh
+      # in-place, claude-credentials-sync.timer copies the refreshed
+      # bundle back to /persistent so the next restart and the next
+      # `microvm -d` + redeploy both inherit the fresh token. The
+      # operator's stage_for_vm is authoritative on restart — copy
+      # is unconditional.
+      ExecStartPre = pkgs.writeShellScript "claude-remote-prestart" ''
+        set -e
+        mkdir -p /home/agent/.claude
+        if [ -s /persistent/credentials.json ]; then
+          cat /persistent/credentials.json > /home/agent/.claude/.credentials.json
+          chmod 0600 /home/agent/.claude/.credentials.json
+        fi
+        if [ -s /persistent/claude.json ]; then
+          cat /persistent/claude.json > /home/agent/.claude.json
+          chmod 0600 /home/agent/.claude.json
+        fi
+      '';
       ExecStart = pkgs.writeShellScript "claude-remote-start" ''
         set -euo pipefail
         cd /home/agent/work
@@ -254,6 +284,56 @@ in
   services.openssh = {
     enable = lib.mkDefault (repoArgs.operatorSshKey != null);
     settings.PasswordAuthentication = false;
+  };
+
+  ###### claude-credentials-sync
+  # Claude refreshes its oauth access token every ~24h (the bundle
+  # has a refreshToken with a longer life). On the laptop that
+  # refresh writes back to ~/.claude/.credentials.json and the cycle
+  # continues indefinitely. In the guest we used to bind-mount that
+  # file, which made the atomic rename fail and the refresh
+  # invisibly drop on the floor — so after one access-token cycle
+  # the agent would crashloop with 401 until the operator re-staged.
+  #
+  # New design: the file lives in /home/agent/.claude as a real
+  # writable file (ExecStartPre seeds it from /persistent on each
+  # claude-remote start). This timer + oneshot syncs the refreshed
+  # bundle BACK to /persistent on a 5min cadence so it survives
+  # restarts and destroy+redeploy. The newness check means an
+  # operator restage via orbit isn't clobbered between sync ticks.
+  systemd.services.claude-credentials-sync = {
+    description = "Persist refreshed claude credentials back to /persistent";
+    serviceConfig = {
+      Type = "oneshot";
+      User = "agent";
+      ExecStart = pkgs.writeShellScript "claude-credentials-sync" ''
+        set -e
+        # Direct overwrite (cat > file) not cp, because /persistent/
+        # is lagrange-admin-owned on the host and agent can't create
+        # the .tmp companion `cp` would otherwise use. Writing to the
+        # existing inode is allowed (the file itself is agent-owned).
+        sync_if_newer() {
+          src="$1"; dst="$2"
+          if [ -s "$src" ] && [ "$src" -nt "$dst" ]; then
+            cat "$src" > "$dst"
+          fi
+        }
+        sync_if_newer /home/agent/.claude/.credentials.json /persistent/credentials.json
+        sync_if_newer /home/agent/.claude.json              /persistent/claude.json
+      '';
+    };
+  };
+  systemd.timers.claude-credentials-sync = {
+    description = "Periodic sync of refreshed claude credentials";
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      # Give claude-remote a minute to seed + actually start before
+      # we look for a refresh, then check every 5 min. Claude
+      # typically refreshes hours before expiry, so 5min granularity
+      # leaves plenty of headroom.
+      OnBootSec = "1min";
+      OnUnitActiveSec = "5min";
+    };
   };
 
   ###### claude-session-publisher

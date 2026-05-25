@@ -217,5 +217,37 @@ pkgsWithStub.testers.runNixOSTest {
     pub_state = guest.succeed("systemctl is-active claude-session-publisher.service").strip()
     assert pub_state == "active", f"publisher went non-active: {pub_state}\n" + \
         guest.succeed("journalctl -u claude-session-publisher -n 30 --no-pager")
+
+    # Bug-catcher #5 + #6: oauth-refresh round-trip.
+    # Stage real content into /persistent (couldn't use tmpfiles `f+`
+    # because the shared module's `f` rule wins on duplicate path),
+    # restart claude-remote to trigger ExecStartPre, confirm the
+    # seed copy lands in /home/agent. Then simulate a claude
+    # refresh by overwriting ~/.claude/.credentials.json with new
+    # content and force-running the sync — assert it reaches
+    # /persistent via the direct-write (no atomic-rename) path.
+    guest.succeed(
+        "sudo -u agent bash -c 'cat > /persistent/credentials.json' "
+        "<<< '{\"claudeAiOauth\":{\"accessToken\":\"seed\"}}'"
+    )
+    guest.succeed("systemctl restart claude-remote.service")
+    guest.wait_until_succeeds(
+        "test -s /home/agent/.claude/.credentials.json", timeout=30
+    )
+    seeded = guest.succeed("cat /home/agent/.claude/.credentials.json").strip()
+    assert "seed" in seeded, f"ExecStartPre didn't seed credentials: {seeded!r}"
+
+    # Now simulate the claude oauth-refresh that used to lose data:
+    # write a new bundle to ~/.claude/.credentials.json, force the
+    # sync service to run, confirm /persistent has the new content.
+    guest.succeed(
+        "sudo -u agent bash -c 'echo refreshed > /home/agent/.claude/.credentials.json'"
+    )
+    # File-mtime comparison in the sync needs `-nt` to be true; sleep
+    # 1s so the file's mtime is unambiguously newer.
+    import time; time.sleep(1)
+    guest.succeed("systemctl start claude-credentials-sync.service")
+    synced = guest.succeed("cat /persistent/credentials.json").strip()
+    assert synced == "refreshed", f"sync didn't persist refreshed creds: {synced!r}"
   '';
 }
