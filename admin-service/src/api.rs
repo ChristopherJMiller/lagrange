@@ -238,6 +238,20 @@ async fn create_repo(
         }
     }
 
+    // Refuse to deploy a vessel that can't possibly register with
+    // claude.ai/code. The registration call is the first thing claude
+    // does at boot — there's no graceful fallback to refresh from an
+    // expired access token before that point. Better to fail loudly
+    // here with an actionable error than to deploy a VM that
+    // crashloops with a confusing 401 in its journal.
+    if !credentials::is_usable_for_register(&s.settings).await? {
+        return Err(ApiError::BadRequest(
+            "claude credentials have expired — re-stage from your laptop via \
+             scripts/restage-claude-credentials.sh (after `claude auth login`)"
+                .into(),
+        ));
+    }
+
     // Serialize provisioning per-name so a concurrent DELETE/start can't race.
     let _guard = s.lock_vm(&body.name).await;
 

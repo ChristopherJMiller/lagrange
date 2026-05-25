@@ -17,12 +17,15 @@ export function CredentialStatusRow() {
 
   const credPresent = credentials?.present === true
   const credKnown = credentials !== null
+  const credExpired = credentials?.expired === true
   const accountsKnown = accounts !== null
   const presentAccounts = (accounts ?? []).filter((a) => a.present)
 
-  // What's "missing": claude session unstaged, OR github has 0 accounts
+  // What's "missing": claude session unstaged, OR github has 0 accounts.
+  // Expired creds count too — they're staged but unusable for new deploys.
   const missing: string[] = []
   if (credKnown && !credPresent) missing.push('claude session')
+  if (credPresent && credExpired) missing.push('claude session (expired)')
   if (accountsKnown && presentAccounts.length === 0) missing.push('github account')
 
   return (
@@ -44,15 +47,15 @@ export function CredentialStatusRow() {
           className={cn(
             'group relative flex items-start gap-3 border bg-surface/60 px-3.5 py-3 text-left',
             'transition-colors duration-150',
-            credKnown && !credPresent
+            (credKnown && !credPresent) || credExpired
               ? 'border-red/30 hover:border-red/60'
               : 'border-border hover:border-border-bright',
           )}
         >
           <span className="mt-1.5 shrink-0">
             <StatusDot
-              variant={credPresent ? 'green' : credKnown ? 'red' : 'dim'}
-              pulse={credPresent}
+              variant={credExpired ? 'red' : credPresent ? 'green' : credKnown ? 'red' : 'dim'}
+              pulse={credPresent && !credExpired}
             />
           </span>
           <div className="min-w-0 flex-1">
@@ -63,18 +66,32 @@ export function CredentialStatusRow() {
               <span
                 className={cn(
                   'text-[10px] uppercase tracking-widest tabular-nums',
-                  credPresent ? 'text-green' : credKnown ? 'text-red' : 'text-dimmer',
+                  credExpired
+                    ? 'text-red'
+                    : credPresent
+                      ? 'text-green'
+                      : credKnown
+                        ? 'text-red'
+                        : 'text-dimmer',
                 )}
               >
-                {credPresent ? 'staged' : credKnown ? 'absent' : '—'}
+                {credExpired
+                  ? 'EXPIRED'
+                  : credPresent
+                    ? 'staged'
+                    : credKnown
+                      ? 'absent'
+                      : '—'}
               </span>
             </div>
             <div className="mt-0.5 text-[10px] text-dim truncate">
               full-scope login — required for Remote Control
             </div>
-            <div className="mt-1.5 text-[10px] tracking-wider text-dimmer">
-              {credentials?.set_at ? `set ${relativeTime(credentials.set_at)}` : 'not set'}
-            </div>
+            <ExpiryLine
+              setAt={credentials?.set_at ?? null}
+              expiresAt={credentials?.expires_at ?? null}
+              expired={credExpired}
+            />
           </div>
         </button>
 
@@ -133,15 +150,36 @@ export function CredentialStatusRow() {
         </button>
       </div>
 
-      {/* CTA when something missing */}
-      {!initialLoad && missing.length > 0 && (
-        <div className="mt-3 flex items-center justify-between border border-amber/30 bg-amber/[0.05] px-4 py-2.5">
+      {/* CTA when something missing or expired */}
+      {!initialLoad && (missing.length > 0 || credExpired) && (
+        <div
+          className={cn(
+            'mt-3 flex items-center justify-between border px-4 py-2.5',
+            credExpired
+              ? 'border-red/40 bg-red/[0.05]'
+              : 'border-amber/30 bg-amber/[0.05]',
+          )}
+        >
           <div className="flex items-baseline gap-3">
-            <span className="text-amber text-xs tracking-widest">! BRIEF</span>
-            <span className="text-[11px] text-amber/90 tracking-wider">
-              {missing.length === 2
-                ? 'No credentials staged. New vessels will register but will fail to authenticate.'
-                : `Missing: ${missing.join(', ')}. Run the setup brief.`}
+            <span
+              className={cn(
+                'text-xs tracking-widest',
+                credExpired ? 'text-red' : 'text-amber',
+              )}
+            >
+              {credExpired ? '! EXPIRED' : '! BRIEF'}
+            </span>
+            <span
+              className={cn(
+                'text-[11px] tracking-wider',
+                credExpired ? 'text-red/90' : 'text-amber/90',
+              )}
+            >
+              {credExpired
+                ? 'Claude session expired. New deploys are blocked. Restage from your laptop: scripts/restage-claude-credentials.sh'
+                : missing.length === 2
+                  ? 'No credentials staged. New vessels will register but will fail to authenticate.'
+                  : `Missing: ${missing.join(', ')}. Run the setup brief.`}
             </span>
           </div>
           <Button variant="hero" size="sm" onClick={() => openWizard(true)}>
@@ -150,5 +188,41 @@ export function CredentialStatusRow() {
         </div>
       )}
     </section>
+  )
+}
+
+/**
+ * Compact "set X ago · expires in Y" line under the claude session
+ * card. Colors the expiry side amber when <1h, red when expired.
+ */
+function ExpiryLine({
+  setAt,
+  expiresAt,
+  expired,
+}: {
+  setAt: string | null
+  expiresAt: string | null
+  expired: boolean
+}) {
+  if (!setAt && !expiresAt) {
+    return <div className="mt-1.5 text-[10px] tracking-wider text-dimmer">not set</div>
+  }
+  const setLine = setAt ? `set ${relativeTime(setAt)}` : null
+  let expiryLine: { text: string; color: string } | null = null
+  if (expiresAt) {
+    const ms = Date.parse(expiresAt) - Date.now()
+    if (expired) {
+      expiryLine = { text: `expired ${relativeTime(expiresAt)}`, color: 'text-red' }
+    } else if (ms < 60 * 60 * 1000) {
+      expiryLine = { text: `expires ${relativeTime(expiresAt)}`, color: 'text-amber' }
+    } else {
+      expiryLine = { text: `expires ${relativeTime(expiresAt)}`, color: 'text-dimmer' }
+    }
+  }
+  return (
+    <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2 text-[10px] tracking-wider">
+      {setLine && <span className="text-dimmer">{setLine}</span>}
+      {expiryLine && <span className={cn(expiryLine.color)}>· {expiryLine.text}</span>}
+    </div>
   )
 }

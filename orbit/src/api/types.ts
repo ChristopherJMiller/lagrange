@@ -69,6 +69,10 @@ export type AgentClaudeMdDto = {
 export type CredStatus = {
   present: boolean
   set_at: string | null
+  /** claudeAiOauth.expiresAt; only set for claude-credentials. */
+  expires_at?: string | null
+  /** Convenience: expires_at < now. */
+  expired?: boolean
 }
 
 export type VersionInfo = {

@@ -43,6 +43,19 @@ const MAX_BYTES: usize = 1024 * 1024;
 pub struct Status {
     pub present: bool,
     pub set_at: Option<DateTime<Utc>>,
+    /// claudeAiOauth.expiresAt parsed out of the staged credentials.json.
+    /// None when the file is absent or doesn't have the expected shape.
+    /// Claude refreshes the access token in place periodically (the
+    /// bundle has a long-lived refreshToken), but the refresh writes
+    /// land in the per-VM /persistent copy — the global staged file
+    /// here goes stale on a ~24h cycle unless the operator re-stages
+    /// after running `claude auth login`.
+    pub expires_at: Option<DateTime<Utc>>,
+    /// Convenience: expires_at < now. New repo-VMs can't register a
+    /// Remote Control session with an expired access token — the
+    /// registration itself fails with 401 before claude has a chance
+    /// to refresh. The API gates POST /v1/repos on this.
+    pub expired: bool,
 }
 
 pub fn host_creds_path(s: &Settings) -> PathBuf {
@@ -64,15 +77,49 @@ pub async fn status(s: Arc<Settings>) -> ApiResult<Status> {
     let creds_md = tokio::fs::metadata(&host_creds_path(&s)).await;
     let install_md = tokio::fs::metadata(&host_install_path(&s)).await;
     match (creds_md, install_md) {
-        (Ok(c), Ok(_)) => Ok(Status {
-            present: true,
-            set_at: c.modified().ok().map(DateTime::<Utc>::from),
-        }),
+        (Ok(c), Ok(_)) => {
+            let expires_at = parse_expiry(&host_creds_path(&s)).await;
+            let expired = expires_at.map(|t| t < Utc::now()).unwrap_or(false);
+            Ok(Status {
+                present: true,
+                set_at: c.modified().ok().map(DateTime::<Utc>::from),
+                expires_at,
+                expired,
+            })
+        }
         _ => Ok(Status {
             present: false,
             set_at: None,
+            expires_at: None,
+            expired: false,
         }),
     }
+}
+
+/// Pull `claudeAiOauth.expiresAt` (ms epoch) out of a credentials.json.
+/// Returns None on missing file, unreadable file, invalid JSON, or
+/// missing-field — none of those are errors worth surfacing to the
+/// operator; we just report "expiry unknown" and let claude itself
+/// fail loudly if the bundle is actually broken.
+pub async fn parse_expiry(path: &std::path::Path) -> Option<DateTime<Utc>> {
+    let bytes = tokio::fs::read(path).await.ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let ms = v.get("claudeAiOauth")?.get("expiresAt")?.as_i64()?;
+    let secs = ms / 1000;
+    let nanos = ((ms % 1000) * 1_000_000) as u32;
+    DateTime::<Utc>::from_timestamp(secs, nanos)
+}
+
+/// Are the currently-staged credentials usable for a fresh registration?
+/// Returns true when missing entirely (so create_repo can show the
+/// "stage credentials first" error elsewhere) and true when present +
+/// not expired. Returns false ONLY when present-but-expired.
+pub async fn is_usable_for_register(s: &Settings) -> ApiResult<bool> {
+    if !host_creds_path(s).exists() {
+        return Ok(true);
+    }
+    let expires_at = parse_expiry(&host_creds_path(s)).await;
+    Ok(expires_at.map(|t| t > Utc::now()).unwrap_or(true))
 }
 
 pub async fn set(s: &Settings, credentials_json: &str, claude_json: &str) -> ApiResult<()> {

@@ -66,6 +66,51 @@ function lookup(vm: VmDto): StatusLook {
 }
 
 /**
+ * The Drive Agent CTA, plus a small "may take a beat" hint when the VM
+ * was started recently. claude.ai/code's sidebar caches the session
+ * list — even after the publisher posts a URL here, the session can
+ * take 30–60s to appear in claude.ai's UI. Showing the elapsed-since-
+ * start gives the operator a way to tell normal lag from broken.
+ */
+function DriveButton({ vm, onClick }: { vm: VmDto; onClick: () => void }) {
+  const [, force] = useState(0)
+  useEffect(() => {
+    const id = window.setInterval(() => force((x) => x + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [])
+  const startedMs = vm.last_started_at ? Date.parse(vm.last_started_at) : NaN
+  const elapsedSec = Number.isFinite(startedMs)
+    ? Math.max(0, Math.floor((Date.now() - startedMs) / 1000))
+    : null
+  // Within the first 2 min after start, claude.ai/code may not yet
+  // show the session even though we've already received the URL. Hint
+  // accordingly so the operator doesn't think the link is broken.
+  const youngSession = elapsedSec != null && elapsedSec < 120
+  return (
+    <div className="space-y-1.5">
+      <Button
+        variant="hero"
+        size="md"
+        className="w-full justify-between"
+        onClick={onClick}
+        title={`Open session at ${vm.claude_session_url}`}
+      >
+        <span className="flex items-center gap-2">
+          <span className="text-amber/60">◉</span>
+          <span>Drive Agent</span>
+        </span>
+        <span className="text-amber/70 transition-transform group-hover:translate-x-0.5">⤴</span>
+      </Button>
+      {youngSession && (
+        <div className="text-[10px] uppercase tracking-widest text-dimmer text-center">
+          registered just now · claude.ai may take ~30s to show the session
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
  * Replaces the Drive Agent button while we're waiting for the guest's
  * claude-session-publisher to scrape the session URL from the
  * `claude remote-control` typescript and POST it back. Shows elapsed
@@ -295,19 +340,7 @@ export function VesselCard({ vm }: { vm: VmDto }) {
       {/* actions */}
       <div className="space-y-2 px-4 py-3">
         {hasDeepLink ? (
-          <Button
-            variant="hero"
-            size="md"
-            className="w-full justify-between"
-            onClick={openDrive}
-            title={`Open session at ${vm.claude_session_url}`}
-          >
-            <span className="flex items-center gap-2">
-              <span className="text-amber/60">◉</span>
-              <span>Drive Agent</span>
-            </span>
-            <span className="text-amber/70 transition-transform group-hover:translate-x-0.5">⤴</span>
-          </Button>
+          <DriveButton vm={vm} onClick={openDrive} />
         ) : (
           <AwaitingSession vm={vm} />
         )}

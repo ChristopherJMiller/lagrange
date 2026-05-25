@@ -21,6 +21,8 @@ export function DeployDialog() {
   const close = useUi((s) => s.closeDeploy)
   const toast = useUi((s) => s.toast)
   const capacity = useUi((s) => s.capacity)
+  const credentials = useUi((s) => s.credentials)
+  const credExpired = credentials?.expired === true
   const accounts = useUi((s) => s.githubAccounts) ?? []
   const presentAccounts = accounts.filter((a) => a.present)
 
@@ -278,6 +280,17 @@ export function DeployDialog() {
           </div>
         )}
 
+        {credExpired && (
+          <div className="border border-red/40 bg-red/5 px-3 py-2 text-xs text-red">
+            <span className="text-[10px] uppercase tracking-widest text-red/80">! credentials expired</span>
+            <span className="ml-2 font-mono">
+              new vessels can't register with claude.ai/code right now. Re-stage from your
+              laptop (`scripts/restage-claude-credentials.sh` after `claude auth login`),
+              then retry.
+            </span>
+          </div>
+        )}
+
         {error && (
           <div className="border border-red/40 bg-red/5 px-3 py-2 text-xs text-red">
             <span className="text-[10px] uppercase tracking-widest text-red/80">! FAULT</span>
@@ -297,7 +310,7 @@ export function DeployDialog() {
               type="submit"
               variant="hero"
               size="md"
-              disabled={!formValid || memWouldOverfill}
+              disabled={!formValid || memWouldOverfill || credExpired}
               loading={submitting}
             >
               {submitting ? 'Launching…' : 'Launch ▸'}
