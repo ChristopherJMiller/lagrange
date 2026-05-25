@@ -85,14 +85,29 @@ nixpkgs.lib.nixosSystem {
         balloon = true;
 
         # Mount the virtiofs host /nix/store at /nix/.ro-store (read-only)
-        # and overlay a tmpfs at /nix/.rw-store, then union both at
-        # /nix/store. Without this, every write to /nix/store hits the
-        # read-only virtiofs mount and fails with EROFS — meaning the
-        # guest can't realise any new derivation, so `nix-shell`,
-        # `nix develop`, `nix build`, and anything that downloads from
-        # a substituter all break. The overlay is the standard pattern
-        # for read-only-host-store VMs (microvm.nix exposes it directly).
+        # and overlay /nix/.rw-store at /nix/store. Without an overlay,
+        # every write to /nix/store hits the read-only virtiofs mount
+        # and fails with EROFS — `nix-shell`, `nix develop`, `nix build`,
+        # and anything that downloads from a substituter all break.
         writableStoreOverlay = "/nix/.rw-store";
+
+        # Back the writable overlay with a per-VM sparse disk image
+        # instead of letting it land on the rootfs tmpfs (microvm.nix's
+        # default, 50% of guest RAM). The first agent that ran a
+        # nontrivial `nix develop` here filled the RAM-backed overlay
+        # immediately — a Rust devShell closure is multi-GB, and the
+        # tier sizes we run (2–32 GiB RAM) would all run out before the
+        # devShell finished. ext4 on a 32 GiB sparse raw image gives
+        # the agent room without depending on RAM at all; sparse means
+        # actual host-disk usage is only what's written. Cleaned up by
+        # `rm -rf /var/lib/microvms/<name>/` on `microvm -d` (the admin
+        # service's rm-rf fallback handles this).
+        volumes = [{
+          image = "/var/lib/microvms/${repoArgs.name}/nix-overlay.img";
+          mountPoint = "/nix/.rw-store";
+          size = 32768;
+          fsType = "ext4";
+        }];
 
         shares = [
           # Read-only host /nix/store.

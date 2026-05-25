@@ -108,13 +108,21 @@ features are on, so all of `nix develop`, `nix build`, `nix shell
 nixpkgs#<pkg>`, `nix-shell -p <pkg>`, and `nix flake show` work
 normally for the `agent` user.
 
-`/nix/store` is virtiofs-mounted **read-only** from the host at
-`/nix/.ro-store`, then unioned with a tmpfs **writable overlay** at
-`/nix/.rw-store`. The merged view at `/nix/store` lets nix realise
-new derivations — writes land in the overlay (and disappear on VM
-reboot), reads come from whichever layer has them.
+`/nix/store` is a union mount:
 
-Substituters: only the nixpkgs defaults (cache.nixos.org) are
+- **Lower (read-only):** the host's `/nix/store`, virtiofs-shared at
+  `/nix/.ro-store`. Everything the host has already realized is
+  instantly available — no copy, no download.
+- **Upper (writable):** a per-VM sparse ext4 image (~32 GiB max) at
+  `/nix/.rw-store`. New derivations the VM builds, and anything pulled
+  from substituters, land here.
+
+The image is sparse (only consumes actual usage on the host disk) and
+**persists across VM stop/start/restart**. It's wiped only when the
+VM is destroyed (`microvm -d` / orbit "Destroy"). So you can build
+once and have it cached for the next session.
+
+Substituters: only `cache.nixos.org` (the nixpkgs default) is
 configured. The host's local attic cache is not currently wired in.
 For anything in nixpkgs, substitution works fine. For your own repo's
 flake outputs, the first build inside the VM has to compile from
@@ -122,15 +130,15 @@ source — which is real work but won't fail.
 
 Things to keep in mind:
 
-- The overlay is tmpfs, so anything you build with `nix build` is gone
-  after a VM restart. Don't treat the guest store as durable build cache.
-- A `nix shell` that pulls down a multi-GB closure burns RAM (the
-  overlay shares the VM's memory). Prefer adding the package to the
-  repo's `flake.nix` devShell so the host realises it once and
-  virtiofs-shares it via `/nix/.ro-store`.
-- If the host hasn't substituted something you need and you're
-  building it from source repeatedly, ask the operator to add it to
-  this repo's devShell rather than fighting the overlay each time.
+- The overlay is 32 GiB max. If you fill it (`nix build` of a giant
+  closure, repeated `nix develop` rebuilds), recover with
+  `sudo nix-collect-garbage -d`. ext4 may not return the freed blocks
+  to sparse on the host immediately; `sudo fstrim /nix/.rw-store`
+  forces that if disk usage on the host matters.
+- A `nix shell nixpkgs#foo` that pulls a huge closure still works,
+  but if you find yourself doing it repeatedly, add the package to
+  the repo's `flake.nix` devShell so the host realises it once and
+  every VM sees it via the read-only lower layer (no per-VM copy).
 
 ## When something feels wrong
 

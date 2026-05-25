@@ -186,12 +186,17 @@ in
       proxy_cache_path /var/lib/cache/cargo levels=1:2 keys_zone=cargo:32m
         max_size=30g inactive=30d use_temp_path=off;
 
-      # systemd-resolved listens on 127.0.0.53; use it so nginx doesn't
-      # resolve upstreams at config-test time. Combined with proxy_pass via
-      # a variable, this forces lazy DNS — both more resilient in production
-      # (transient DNS flakiness doesn't kill nginx) and what makes the test
-      # VM (no internet/DNS at config-test time) work.
-      resolver 127.0.0.53 valid=300s ipv6=off;
+      # Public DNS, not 127.0.0.53. systemd-resolved is NOT enabled on
+      # this host, so pointing nginx at its stub listener produced a
+      # 30s hang followed by 502 on every cargo index fetch (the
+      # resolver never answered, the upstream was never reached). Use
+      # the same upstream servers dnsmasq forwards to so we don't add
+      # a new external dependency. Combined with proxy_pass via a
+      # variable, this still gets lazy DNS — config-test doesn't try
+      # to resolve upstreams (which is what makes the test VM with no
+      # internet at config-test time work), and a transient outage at
+      # one resolver doesn't kill nginx.
+      resolver 1.1.1.1 8.8.8.8 valid=300s ipv6=off;
     '';
 
     virtualHosts."cargo-cache" = {
