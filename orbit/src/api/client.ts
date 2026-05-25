@@ -9,6 +9,7 @@ import type {
   GithubBranchDto,
   GithubRepoDto,
   HealthDto,
+  SentryAccount,
   VmDto,
 } from './types'
 
@@ -76,6 +77,24 @@ export const api = {
     }),
   setVmGithubAccount: (name: string, account: string | null) =>
     request<void>(`/v1/repos/${encodeURIComponent(name)}/github-account`, {
+      method: 'PUT',
+      body: JSON.stringify({ account }),
+    }),
+  listSentryAccounts: () => request<SentryAccount[]>('/v1/auth/sentry-accounts'),
+  // bundle = the OAuth object jq'd out of
+  //   .mcpServers.sentry.oauth in ~/.claude.json
+  // on the operator's laptop after a one-time browser OAuth.
+  upsertSentryAccount: (alias: string, bundle: unknown) =>
+    request<void>(`/v1/auth/sentry-accounts/${encodeURIComponent(alias)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ bundle }),
+    }),
+  deleteSentryAccount: (alias: string) =>
+    request<void>(`/v1/auth/sentry-accounts/${encodeURIComponent(alias)}`, {
+      method: 'DELETE',
+    }),
+  setVmSentryAccount: (name: string, account: string | null) =>
+    request<void>(`/v1/repos/${encodeURIComponent(name)}/sentry-account`, {
       method: 'PUT',
       body: JSON.stringify({ account }),
     }),

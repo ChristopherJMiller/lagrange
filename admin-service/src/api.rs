@@ -5,6 +5,7 @@ use crate::credentials;
 use crate::db;
 use crate::error::{ApiError, ApiResult};
 use crate::github_accounts;
+use crate::sentry_accounts;
 use crate::github_repos;
 use crate::state::AppState;
 use crate::version;
@@ -58,6 +59,15 @@ pub fn router(state: AppState, auth: Arc<AuthCfg>) -> Router {
         .route(
             "/v1/repos/:name/github-account",
             put(set_vm_github_account),
+        )
+        .route("/v1/auth/sentry-accounts", get(list_sentry_accounts))
+        .route(
+            "/v1/auth/sentry-accounts/:alias",
+            put(upsert_sentry_account).delete(delete_sentry_account),
+        )
+        .route(
+            "/v1/repos/:name/sentry-account",
+            put(set_vm_sentry_account),
         )
         .layer(middleware::from_fn(move |req, next| {
             let auth = auth.clone();
@@ -176,6 +186,11 @@ struct CreateRepo {
     /// returns 400.
     #[serde(default)]
     github_account: Option<String>,
+    /// Alias of the sentry_accounts row whose OAuth bundle to splice
+    /// into mcpServers.sentry. None → no Sentry MCP server staged
+    /// (claude won't see it at all). 400 if alias is unknown.
+    #[serde(default)]
+    sentry_account: Option<String>,
 }
 
 fn default_branch() -> String {
@@ -237,6 +252,14 @@ async fn create_repo(
             )));
         }
     }
+    if let Some(ref alias) = body.sentry_account {
+        if !sentry_accounts::exists(&s.db, alias).await? {
+            return Err(ApiError::BadRequest(format!(
+                "sentry_account '{}' does not exist — create it with PUT /v1/auth/sentry-accounts/{}",
+                alias, alias
+            )));
+        }
+    }
 
     // Refuse to deploy a vessel that can't possibly register with
     // claude.ai/code. The registration call is the first thing claude
@@ -290,6 +313,7 @@ async fn create_repo(
         body.mem_mb,
         &body.permission_mode,
         body.github_account.as_deref(),
+        body.sentry_account.as_deref(),
     )
     .await?;
 
@@ -301,6 +325,23 @@ async fn create_repo(
         let _ = db::delete_vm(&s.db, &body.name).await;
         return Err(e);
     }
+
+    // Stage the operator's claude session into this VM's /persistent,
+    // splicing the per-VM Sentry MCP bundle into mcpServers.sentry if
+    // a sentry_account was specified. Done AFTER
+    // provision_persistent_volume so the agent state dir exists.
+    let sentry_bundle = match body.sentry_account.as_deref() {
+        Some(alias) => sentry_accounts::read_bundle(&s.settings, alias).await?,
+        None => None,
+    };
+    if let Err(e) =
+        credentials::stage_for_vm(&s.settings, &body.name, sentry_bundle.as_ref()).await
+    {
+        let _ = db::release_ip(&s.db, &body.name, &ip).await;
+        let _ = db::delete_vm(&s.db, &body.name).await;
+        return Err(e);
+    }
+
     if let Err(e) = vm::write_vm_flake(
         &s.settings,
         &body.name,
@@ -319,8 +360,7 @@ async fn create_repo(
         return Err(e);
     }
 
-    // Stage the per-VM gh.env from the assigned account (if any). Done
-    // AFTER provision_persistent_volume so the agent state dir exists.
+    // Stage the per-VM gh.env from the assigned account (if any).
     if let Err(e) = vm::stage_github_for_vm(
         &s.settings,
         &body.name,
@@ -374,6 +414,10 @@ struct VmDto {
     claude_session_url: Option<String>,
     permission_mode: String,
     github_account: Option<String>,
+    /// Per-VM Sentry MCP account assignment (alias into
+    /// sentry_accounts). None means mcpServers.sentry is not present
+    /// in the staged .claude.json for this vessel.
+    sentry_account: Option<String>,
     /// Last time the operator pressed start (or create) — RFC 3339.
     /// Surfaced so the orbit UI can show "awaiting registration · 42s"
     /// while the guest's claude-session-publisher is still polling
@@ -396,6 +440,7 @@ impl VmDto {
             claude_session_url: r.claude_session_url,
             permission_mode: r.permission_mode,
             github_account: r.github_account,
+            sentry_account: r.sentry_account,
             last_started_at: r.last_started_at.map(|t| t.to_rfc3339()),
         }
     }
@@ -545,7 +590,8 @@ async fn delete_claude_credentials(State(s): State<AppState>) -> ApiResult<Statu
 async fn restage_all_vm_credentials(s: &AppState) -> ApiResult<()> {
     let vms = db::list_vms(&s.db).await?;
     for v in vms {
-        credentials::stage_for_vm(&s.settings, &v.name).await?;
+        let bundle = sentry_accounts::lookup_bundle_for_vm(&s.db, &s.settings, &v.name).await?;
+        credentials::stage_for_vm(&s.settings, &v.name, bundle.as_ref()).await?;
     }
     Ok(())
 }
@@ -629,6 +675,113 @@ async fn set_vm_github_account(
         tracing::warn!(vm = %name, error = %e, "restage gh.env failed");
     }
     tracing::info!(vm = %name, account = ?body.account, "vm github-account updated");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ── sentry account handlers ──────────────────────────────────────────
+// Same shape as the github-account handlers above, but the staged
+// per-VM file is .claude.json (the bundle gets spliced into
+// mcpServers.sentry.oauth), not gh.env. credentials::stage_for_vm
+// reads the VM's sentry_account from the DB itself, so all the route
+// handlers need to do on an account change is restage credentials.
+
+#[derive(Deserialize)]
+struct SetSentryAccountBundleRequest {
+    /// OAuth bundle as JSON. Exactly the object found at
+    /// mcpServers.sentry.oauth in ~/.claude.json after the operator
+    /// has completed Sentry OAuth on their laptop. Must contain at
+    /// least an `accessToken`; `refreshToken` + `expiresAt` are
+    /// strongly recommended (without them, the agent can't refresh
+    /// inside the VM and the token will go cold).
+    bundle: serde_json::Value,
+}
+
+async fn list_sentry_accounts(
+    State(s): State<AppState>,
+) -> ApiResult<Json<Vec<sentry_accounts::Account>>> {
+    Ok(Json(sentry_accounts::list(&s.db, &s.settings).await?))
+}
+
+async fn upsert_sentry_account(
+    State(s): State<AppState>,
+    Path(alias): Path<String>,
+    Json(body): Json<SetSentryAccountBundleRequest>,
+) -> ApiResult<StatusCode> {
+    let serialized = serde_json::to_string(&body.bundle)
+        .map_err(|e| ApiError::BadRequest(format!("re-serialize bundle: {e}")))?;
+    sentry_accounts::upsert(&s.db, &s.settings, &alias, &serialized).await?;
+    // Restage credentials for every VM pointing at this alias — the
+    // updated mcpServers.sentry.oauth lands on next claude-remote
+    // restart. We restage the whole credentials bundle (not just
+    // mcpServers) because stage_for_vm regenerates the patched
+    // claude.json from the host source + DB lookups in one pass; no
+    // partial-mutation hazard.
+    // Read back the freshly-staged bundle to splice into per-VM
+    // claude.json. (Reading the file rather than reusing body.bundle
+    // means we pick up the canonicalised JSON sentry_accounts::upsert
+    // wrote — same bytes the VM will see in its next restage.)
+    let bundle = sentry_accounts::read_bundle(&s.settings, &alias).await?;
+    for vm_name in db::vms_using_sentry_account(&s.db, &alias).await? {
+        if let Err(e) =
+            credentials::stage_for_vm(&s.settings, &vm_name, bundle.as_ref()).await
+        {
+            tracing::warn!(vm = %vm_name, alias = %alias, error = %e, "restage claude.json after sentry upsert failed");
+        }
+    }
+    tracing::info!(alias = %alias, "sentry-account upserted");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_sentry_account(
+    State(s): State<AppState>,
+    Path(alias): Path<String>,
+) -> ApiResult<StatusCode> {
+    let dependents = db::vms_using_sentry_account(&s.db, &alias).await?;
+    sentry_accounts::delete(&s.db, &s.settings, &alias).await?;
+    // Dependents had ON DELETE SET NULL applied to their
+    // sentry_account; restage with bundle=None to drop the
+    // mcpServers.sentry entry from each one's .claude.json.
+    for vm_name in dependents {
+        if let Err(e) = credentials::stage_for_vm(&s.settings, &vm_name, None).await {
+            tracing::warn!(vm = %vm_name, error = %e, "restage claude.json after sentry delete failed");
+        }
+    }
+    tracing::info!(alias = %alias, "sentry-account deleted");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct SetVmSentryAccountRequest {
+    /// `null` clears the assignment (mcpServers.sentry dropped from
+    /// the vessel's .claude.json on next restage).
+    account: Option<String>,
+}
+
+async fn set_vm_sentry_account(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<SetVmSentryAccountRequest>,
+) -> ApiResult<StatusCode> {
+    if let Some(ref alias) = body.account {
+        if !sentry_accounts::exists(&s.db, alias).await? {
+            return Err(ApiError::BadRequest(format!(
+                "sentry_account '{}' does not exist",
+                alias
+            )));
+        }
+    }
+    let updated = db::set_sentry_account(&s.db, &name, body.account.as_deref()).await?;
+    if !updated {
+        return Err(ApiError::NotFound(name));
+    }
+    let bundle = match body.account.as_deref() {
+        Some(alias) => sentry_accounts::read_bundle(&s.settings, alias).await?,
+        None => None,
+    };
+    if let Err(e) = credentials::stage_for_vm(&s.settings, &name, bundle.as_ref()).await {
+        tracing::warn!(vm = %name, error = %e, "restage claude.json failed");
+    }
+    tracing::info!(vm = %name, account = ?body.account, "vm sentry-account updated");
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -198,7 +198,17 @@ const GUEST_WORKDIR: &str = "/home/agent/work";
 /// `claude remote-control` refuses to register a session for an
 /// untrusted workspace and there's no CLI flag on the subcommand to
 /// bypass the trust dialog.
-pub async fn stage_for_vm(s: &Settings, name: &str) -> ApiResult<()> {
+///
+/// When `sentry_bundle` is Some, an mcpServers.sentry entry is spliced
+/// into the staged claude-install.json with the OAuth bundle inline.
+/// When None, any pre-existing mcpServers.sentry from the operator's
+/// laptop is removed — vessels with no Sentry assignment shouldn't
+/// carry the operator's local Sentry into their .claude.json.
+pub async fn stage_for_vm(
+    s: &Settings,
+    name: &str,
+    sentry_bundle: Option<&serde_json::Value>,
+) -> ApiResult<()> {
     let agent_dir = s.agent_state_dir(name);
     tokio::fs::create_dir_all(&agent_dir).await?;
 
@@ -211,10 +221,11 @@ pub async fn stage_for_vm(s: &Settings, name: &str) -> ApiResult<()> {
         Err(e) => return Err(ApiError::Io(e)),
     }
 
-    // claude-install.json: parse, inject trust for /home/agent/work, serialize.
+    // claude-install.json: parse, inject trust for /home/agent/work +
+    // mcpServers entries, serialize.
     match tokio::fs::read_to_string(&host_install_path(s)).await {
         Ok(content) => {
-            let patched = inject_workspace_trust(&content)?;
+            let patched = inject_workspace_trust(&content, sentry_bundle)?;
             write_atomic_0640_users(&vm_install_path(s, name), &patched).await?;
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -233,7 +244,10 @@ async fn remove_if_exists(path: &std::path::Path) -> ApiResult<()> {
     }
 }
 
-fn inject_workspace_trust(json: &str) -> ApiResult<String> {
+fn inject_workspace_trust(
+    json: &str,
+    sentry_bundle: Option<&serde_json::Value>,
+) -> ApiResult<String> {
     let mut v: serde_json::Value = serde_json::from_str(json).map_err(|e| {
         ApiError::Other(anyhow::anyhow!(
             "host-staged claude-install.json is not valid JSON: {e}"
@@ -269,14 +283,40 @@ fn inject_workspace_trust(json: &str) -> ApiResult<String> {
     let mcp_servers = root
         .entry("mcpServers")
         .or_insert_with(|| serde_json::json!({}));
-    if let Some(mcp_obj) = mcp_servers.as_object_mut() {
-        mcp_obj.insert(
-            "github".into(),
-            serde_json::json!({
-                "command": "github-mcp-server",
-                "args": ["stdio"],
-            }),
-        );
+    let mcp_obj = mcp_servers.as_object_mut().ok_or_else(|| {
+        ApiError::Other(anyhow::anyhow!(
+            "claude-install.json `mcpServers` is not an object"
+        ))
+    })?;
+    mcp_obj.insert(
+        "github".into(),
+        serde_json::json!({
+            "command": "github-mcp-server",
+            "args": ["stdio"],
+        }),
+    );
+
+    // mcpServers.sentry — remote SSE to mcp.sentry.dev with the
+    // operator's OAuth bundle spliced in. When the VM has no Sentry
+    // account assigned we explicitly REMOVE any pre-existing entry
+    // so the operator's local sentry session doesn't leak into a
+    // remote vessel. (Same defense as the github case above, but
+    // omission rather than overwrite — the VM should advertise no
+    // sentry tool at all in that case.)
+    match sentry_bundle {
+        Some(bundle) => {
+            mcp_obj.insert(
+                "sentry".into(),
+                serde_json::json!({
+                    "url": "https://mcp.sentry.dev/mcp",
+                    "transport": "sse",
+                    "oauth": bundle,
+                }),
+            );
+        }
+        None => {
+            mcp_obj.remove("sentry");
+        }
     }
 
     Ok(serde_json::to_string(&v)
@@ -388,7 +428,7 @@ mod tests {
         let cfg = test_settings(s.path(), a.path());
         std::fs::create_dir_all(cfg.agent_state_dir("alpha")).unwrap();
         set(&cfg, "{\"a\":1}", "{\"b\":2}").await.unwrap();
-        stage_for_vm(&cfg, "alpha").await.unwrap();
+        stage_for_vm(&cfg, "alpha", None).await.unwrap();
 
         let cpath = vm_creds_path(&cfg, "alpha");
         let ipath = vm_install_path(&cfg, "alpha");
@@ -410,7 +450,7 @@ mod tests {
 
     #[test]
     fn inject_workspace_trust_creates_projects_when_absent() {
-        let patched = inject_workspace_trust("{}").unwrap();
+        let patched = inject_workspace_trust("{}", None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&patched).unwrap();
         assert_eq!(
             v["projects"]["/home/agent/work"]["hasTrustDialogAccepted"],
@@ -432,7 +472,7 @@ mod tests {
             }
         })
         .to_string();
-        let patched = inject_workspace_trust(&input).unwrap();
+        let patched = inject_workspace_trust(&input, None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&patched).unwrap();
         assert_eq!(v["mcpServers"]["github"]["command"], "github-mcp-server");
         assert_eq!(v["mcpServers"]["github"]["args"], serde_json::json!(["stdio"]));
@@ -443,8 +483,46 @@ mod tests {
 
     #[test]
     fn inject_workspace_trust_creates_mcp_servers_when_absent() {
-        let patched = inject_workspace_trust("{}").unwrap();
+        let patched = inject_workspace_trust("{}", None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&patched).unwrap();
+        assert_eq!(v["mcpServers"]["github"]["command"], "github-mcp-server");
+    }
+
+    #[test]
+    fn inject_workspace_trust_splices_sentry_bundle_when_present() {
+        let bundle = serde_json::json!({
+            "accessToken": "sntrysat_abc",
+            "refreshToken": "rt_def",
+            "expiresAt": 1700000000000_i64,
+        });
+        let patched = inject_workspace_trust("{}", Some(&bundle)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&patched).unwrap();
+        assert_eq!(v["mcpServers"]["sentry"]["url"], "https://mcp.sentry.dev/mcp");
+        assert_eq!(v["mcpServers"]["sentry"]["transport"], "sse");
+        assert_eq!(v["mcpServers"]["sentry"]["oauth"]["accessToken"], "sntrysat_abc");
+        assert_eq!(v["mcpServers"]["sentry"]["oauth"]["refreshToken"], "rt_def");
+    }
+
+    #[test]
+    fn inject_workspace_trust_removes_operator_sentry_when_bundle_absent() {
+        // The operator's local .claude.json may carry their own Sentry
+        // session; a vessel with no Sentry account assignment must NOT
+        // inherit it. Without this explicit removal, the staged file
+        // would leak the operator's local tokens.
+        let input = serde_json::json!({
+            "mcpServers": {
+                "sentry": {
+                    "url": "https://mcp.sentry.dev/mcp",
+                    "transport": "sse",
+                    "oauth": { "accessToken": "operator_local_should_not_leak" }
+                }
+            }
+        })
+        .to_string();
+        let patched = inject_workspace_trust(&input, None).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&patched).unwrap();
+        assert!(v["mcpServers"].get("sentry").is_none());
+        // github MCP is still added even when sentry is removed.
         assert_eq!(v["mcpServers"]["github"]["command"], "github-mcp-server");
     }
 
@@ -456,7 +534,7 @@ mod tests {
             }
         })
         .to_string();
-        let patched = inject_workspace_trust(&input).unwrap();
+        let patched = inject_workspace_trust(&input, None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&patched).unwrap();
         assert_eq!(v["projects"]["/home/chris/other"]["x"], serde_json::json!(1));
         assert_eq!(
@@ -560,11 +638,11 @@ mod tests {
         let cfg = test_settings(s.path(), a.path());
         std::fs::create_dir_all(cfg.agent_state_dir("alpha")).unwrap();
         set(&cfg, "{\"a\":1}", "{\"b\":2}").await.unwrap();
-        stage_for_vm(&cfg, "alpha").await.unwrap();
+        stage_for_vm(&cfg, "alpha", None).await.unwrap();
         assert!(vm_creds_path(&cfg, "alpha").exists());
 
         clear(&cfg).await.unwrap();
-        stage_for_vm(&cfg, "alpha").await.unwrap();
+        stage_for_vm(&cfg, "alpha", None).await.unwrap();
         assert!(!vm_creds_path(&cfg, "alpha").exists());
         assert!(!vm_install_path(&cfg, "alpha").exists());
     }

@@ -78,6 +78,15 @@ The host pre-configures these MCP servers in `~/.claude.json`:
   Use it for richer GitHub operations than `gh` covers ergonomically:
   searching across PRs, reading issues with comments, walking org
   membership, etc. Auth is automatic; no token in your config.
+- **`sentry`** — official `mcp.sentry.dev` remote MCP (SSE), present
+  *only* when this vessel has a Sentry account assigned in orbit. The
+  OAuth bundle is staged from the operator's laptop and is scoped to
+  the Sentry org they authorized — you can read issues, project
+  details, and replays for that org, but you cannot reach orgs the
+  operator didn't authorize. If the entry is absent from your
+  `~/.claude.json` mcpServers section, no Sentry account was
+  assigned; ask the operator via the deploy dialog or
+  `PUT /v1/repos/<name>/sentry-account`.
 
 If your vessel has no GitHub account assigned, the `github` MCP
 server is still wired up but its tools will fail with an auth error

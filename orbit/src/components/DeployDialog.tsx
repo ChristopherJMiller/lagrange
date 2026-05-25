@@ -25,6 +25,8 @@ export function DeployDialog() {
   const credExpired = credentials?.expired === true
   const accounts = useUi((s) => s.githubAccounts) ?? []
   const presentAccounts = accounts.filter((a) => a.present)
+  const sentryAccounts = useUi((s) => s.sentryAccounts) ?? []
+  const presentSentry = sentryAccounts.filter((a) => a.present)
 
   const [name, setName] = useState('')
   const [repoUrl, setRepoUrl] = useState('')
@@ -34,6 +36,7 @@ export function DeployDialog() {
   const [memGib, setMemGib] = useState(8)
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('auto')
   const [githubAccount, setGithubAccount] = useState<string | null>(null)
+  const [sentryAccount, setSentryAccount] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -74,6 +77,10 @@ export function DeployDialog() {
     setMemGib(8)
     setPermissionMode('auto')
     setGithubAccount(presentAccounts.length === 1 ? presentAccounts[0].alias : null)
+    // Sentry is optional + per-org; never auto-pick. If the operator
+    // had multiple Sentry orgs staged, defaulting to the first would
+    // silently splice the wrong org's tokens into the new vessel.
+    setSentryAccount(null)
     setError(null)
     setSubmitting(false)
   }
@@ -110,6 +117,7 @@ export function DeployDialog() {
         mem_mb: memMb,
         permission_mode: permissionMode,
         github_account: githubAccount,
+        sentry_account: sentryAccount,
       })
       toast('ok', `vessel "${resp.name}" deployed at ${resp.vm_ip}`)
       await refreshNow()
@@ -171,6 +179,31 @@ export function DeployDialog() {
             </select>
           </div>
         </div>
+        {presentSentry.length > 0 && (
+          <div>
+            <div className="mb-1.5 flex items-baseline justify-between gap-2">
+              <span className="text-[10px] uppercase tracking-widest text-dim">Sentry MCP</span>
+              <span className="text-[10px] uppercase tracking-wider text-dimmer">
+                optional · per-org isolation
+              </span>
+            </div>
+            <div className="flex border border-border bg-bg/60">
+              <span className="px-2 text-cyan opacity-60 select-none self-center">›</span>
+              <select
+                value={sentryAccount ?? ''}
+                onChange={(e) => setSentryAccount(e.target.value || null)}
+                className="block w-full bg-transparent py-2 pr-3 font-mono text-sm text-text outline-none"
+              >
+                <option value="">— none —</option>
+                {presentSentry.map((a) => (
+                  <option key={a.alias} value={a.alias}>
+                    {a.alias}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
         <RepoPicker
           value={repoUrl}
           account={githubAccount}

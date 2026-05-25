@@ -4,10 +4,11 @@ import type {
   CredStatus,
   GithubAccount,
   HealthDto,
+  SentryAccount,
   VmDto,
 } from '../api/types'
 
-export type CredKind = 'credentials' | 'github'
+export type CredKind = 'credentials' | 'github' | 'sentry'
 
 export type ToastKind = 'ok' | 'err' | 'info'
 export type ToastItem = { id: string; kind: ToastKind; msg: string; ts: number }
@@ -23,6 +24,7 @@ type UiState = {
   capacity: CapacityDto | null
   credentials: CredStatus | null
   githubAccounts: GithubAccount[] | null
+  sentryAccounts: SentryAccount[] | null
 
   // optimistic in-flight per-VM actions
   busy: Record<string, 'start' | 'stop' | 'restart' | 'destroy' | undefined>
@@ -44,6 +46,7 @@ type UiState = {
   setCapacity: (c: CapacityDto | null) => void
   setCredentials: (v: CredStatus | null) => void
   setGithubAccounts: (a: GithubAccount[] | null) => void
+  setSentryAccounts: (a: SentryAccount[] | null) => void
   markInitialLoaded: () => void
   setLastFetched: (ts: number) => void
   setBusy: (name: string, kind: UiState['busy'][string]) => void
@@ -73,6 +76,7 @@ export const useUi = create<UiState>((set) => ({
   capacity: null,
   credentials: null,
   githubAccounts: null,
+  sentryAccounts: null,
 
   busy: {},
 
@@ -91,6 +95,7 @@ export const useUi = create<UiState>((set) => ({
   setCapacity: (c) => set({ capacity: c }),
   setCredentials: (v) => set({ credentials: v }),
   setGithubAccounts: (a) => set({ githubAccounts: a }),
+  setSentryAccounts: (a) => set({ sentryAccounts: a }),
   markInitialLoaded: () => set({ initialLoad: false }),
   setLastFetched: (ts) => set({ lastFetched: ts }),
   setBusy: (name, kind) =>

@@ -332,6 +332,16 @@ export function VesselCard({ vm }: { vm: VmDto }) {
             )
           }
         />
+        <DataRow
+          label="SENTRY"
+          value={
+            vm.sentry_account ? (
+              <span className="text-text">{vm.sentry_account}</span>
+            ) : (
+              <span className="text-dimmer">— none —</span>
+            )
+          }
+        />
       </div>
 
       {/* divider */}

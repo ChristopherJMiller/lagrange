@@ -21,6 +21,9 @@ export function CredentialStatusRow() {
   const credFormatProblem = credentials?.format_problem
   const accountsKnown = accounts !== null
   const presentAccounts = (accounts ?? []).filter((a) => a.present)
+  const sentry = useUi((s) => s.sentryAccounts)
+  const sentryKnown = sentry !== null
+  const presentSentry = (sentry ?? []).filter((a) => a.present)
 
   // What's "missing": claude session unstaged, OR github has 0 accounts.
   // Expired or malformed creds count too — they're staged but unusable.
@@ -45,7 +48,7 @@ export function CredentialStatusRow() {
               : `${missing.length} unstaged`
         }
       />
-      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3">
         {/* Claude session card */}
         <button
           onClick={() => openWizard(false)}
@@ -159,6 +162,57 @@ export function CredentialStatusRow() {
             </div>
           </div>
         </button>
+
+        {/* Sentry accounts card */}
+        {/* Doesn't auto-open the wizard since the wizard doesn't yet
+            have a Sentry step — operator stages via
+            scripts/restage-sentry-mcp.sh on their laptop. The card is
+            informational + a hand-off point to that script. */}
+        <div
+          className={cn(
+            'group relative flex items-start gap-3 border bg-surface/60 px-3.5 py-3 text-left',
+            'transition-colors duration-150',
+            'border-border',
+          )}
+        >
+          <span className="mt-1.5 shrink-0">
+            <StatusDot
+              variant={
+                presentSentry.length > 0
+                  ? 'green'
+                  : sentryKnown
+                    ? 'dim'
+                    : 'dim'
+              }
+              pulse={presentSentry.length > 0}
+            />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-[11px] uppercase tracking-wider text-text">
+                Sentry MCP
+              </span>
+              <span
+                className={cn(
+                  'text-[10px] uppercase tracking-widest tabular-nums',
+                  presentSentry.length > 0 ? 'text-green' : 'text-dimmer',
+                )}
+              >
+                {sentryKnown
+                  ? `${presentSentry.length} staged`
+                  : '—'}
+              </span>
+            </div>
+            <div className="mt-0.5 text-[10px] text-dim truncate">
+              per-org OAuth bundles · pick one per vessel · optional
+            </div>
+            <div className="mt-1.5 text-[10px] tracking-wider text-dimmer truncate font-mono">
+              {presentSentry.length > 0
+                ? presentSentry.map((a) => a.alias).join(' · ')
+                : 'restage from laptop: scripts/restage-sentry-mcp.sh'}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* CTA when something missing or expired */}

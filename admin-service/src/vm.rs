@@ -210,9 +210,11 @@ pub async fn provision_persistent_volume(settings: &Settings, name: &str) -> Api
         perms.set_mode(0o600);
         tokio::fs::set_permissions(&dst, perms).await?;
     }
-    // Full-scope Claude session needed by Remote Control. No-op when the
-    // operator hasn't run `claude auth login` and POSTed the result yet.
-    crate::credentials::stage_for_vm(settings, name).await?;
+    // NOTE: credentials staging (claude.json + credentials.json + the
+    // MCP server splices) used to happen inline here. It moved to
+    // create_repo's orchestration so the per-VM Sentry bundle can be
+    // looked up and threaded into stage_for_vm in one place. This
+    // function just lays down the persistent-volume scaffolding now.
     // GitHub PAT staging is per-account now; the admin API restages from
     // the assigned account when (a) a VM is created, (b) the assigned
     // account's token is updated, or (c) the VM is reassigned. The

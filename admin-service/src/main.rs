@@ -15,6 +15,7 @@ mod db;
 mod error;
 mod github_accounts;
 mod github_repos;
+mod sentry_accounts;
 mod state;
 mod version;
 mod vm;

@@ -13,10 +13,24 @@ export type VmDto = {
   claude_session_url: string | null
   permission_mode: PermissionMode
   github_account: string | null
+  sentry_account: string | null
   last_started_at: string | null
 }
 
 export type GithubAccount = {
+  alias: string
+  present: boolean
+  set_at: string | null
+  created_at: string
+}
+
+/**
+ * Sentry MCP bundles share the same alias/presence shape as github,
+ * but the on-disk file is the OAuth bundle JSON (accessToken,
+ * refreshToken, expiresAt) — not a single-line token — and it's
+ * spliced into each assigned vessel's .claude.json mcpServers.sentry.
+ */
+export type SentryAccount = {
   alias: string
   present: boolean
   set_at: string | null
@@ -103,6 +117,7 @@ export type CreateVmReq = {
   mem_mb?: number
   permission_mode?: PermissionMode
   github_account?: string | null
+  sentry_account?: string | null
 }
 
 export type CreateVmResp = {

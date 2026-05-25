@@ -23,12 +23,13 @@ export function usePolling() {
     const tick = async () => {
       const ui = useUi.getState()
       try {
-        const [vms, health, capacity, credentials, accounts] = await Promise.all([
+        const [vms, health, capacity, credentials, accounts, sentry] = await Promise.all([
           api.listVms(),
           api.health().catch(() => null),
           api.capacity().catch(() => null),
           api.getCredentials().catch(() => null),
           api.listGithubAccounts().catch(() => null),
+          api.listSentryAccounts().catch(() => null),
         ])
         if (cancelled) return
         ui.setVms(vms)
@@ -36,6 +37,7 @@ export function usePolling() {
         ui.setCapacity(capacity)
         ui.setCredentials(credentials)
         ui.setGithubAccounts(accounts)
+        ui.setSentryAccounts(sentry)
         ui.setVmsError(null)
         ui.setLastFetched(Date.now())
         ui.markInitialLoaded()
@@ -63,18 +65,20 @@ export function usePolling() {
 export async function refreshNow() {
   const ui = useUi.getState()
   try {
-    const [vms, health, capacity, credentials, accounts] = await Promise.all([
+    const [vms, health, capacity, credentials, accounts, sentry] = await Promise.all([
       api.listVms(),
       api.health().catch(() => null),
       api.capacity().catch(() => null),
       api.getCredentials().catch(() => null),
       api.listGithubAccounts().catch(() => null),
+      api.listSentryAccounts().catch(() => null),
     ])
     ui.setVms(vms)
     ui.setHealth(health)
     ui.setCapacity(capacity)
     ui.setCredentials(credentials)
     ui.setGithubAccounts(accounts)
+    ui.setSentryAccounts(sentry)
     ui.setVmsError(null)
     ui.setLastFetched(Date.now())
   } catch (e) {
