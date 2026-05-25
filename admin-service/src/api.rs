@@ -182,10 +182,15 @@ fn default_branch() -> String {
     "main".into()
 }
 fn default_vcpu() -> i64 {
-    4
+    // Matches orbit's "medium" tier in src/lib/tiers.ts. Tiers are
+    // memory-heavy (claude itself idles at ~400 MB, peaks at ~650 MB,
+    // and can balloon to several GB during code generation — and
+    // build tools want their share too), so we keep the vcpu count
+    // modest and bias toward RAM.
+    2
 }
 fn default_mem() -> i64 {
-    4096
+    8192
 }
 fn default_permission_mode() -> String {
     "auto".into()

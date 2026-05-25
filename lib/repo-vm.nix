@@ -24,8 +24,8 @@
 , branch ? "main"
 , vmIp
 , vmMac
-, vcpu ? 4
-, memMb ? 4096
+, vcpu ? 2
+, memMb ? 8192
 , balloonMb ? null
   # "auto" (classifier-mediated approval, default) or "dangerously-skip"
   # (no approval gate; for trusted-environment vessels). The two values
