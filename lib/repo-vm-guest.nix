@@ -42,6 +42,15 @@ in
   # consumers wire claude-code into `pkgs` before this module evaluates,
   # so the `pkgs.claude-code` references below resolve regardless.
 
+  # microvm.nixosModules.microvm masks nix-daemon by default to keep
+  # guest closures small — microvms aren't expected to evaluate nix.
+  # Our guest IS a dev shell for an interactive agent that runs
+  # `nix develop`, `nix flake show`, etc., so unmask. /nix/store is
+  # still virtiofs-mounted read-only from the host, so building new
+  # derivations won't work — but evaluating, entering devShells with
+  # already-realized closures, and reading the store all do.
+  nix.enable = lib.mkForce true;
+
   environment.systemPackages = with pkgs; [
     claude-code
     git
@@ -56,6 +65,16 @@ in
     jq
     tmux
     htop
+    # Common dev tools agents tend to reach for. Curated set — the
+    # agent can `nix shell nixpkgs#<pkg>` for anything else once nix
+    # is enabled (see `nix.enable` above).
+    sqlite     # quick DB inspection / migration testing
+    gnumake    # most Rust/C projects expect `make`
+    gcc        # native compilation (proc macros, build.rs, FFI)
+    pkg-config # discovers system libs for native crates
+    curl       # already available via path on claude-remote, but
+               # also drop into PATH for interactive shell sessions
+    openssl    # cert poking, JWT inspection, etc.
   ];
 
   ###### Agent user (passwordless sudo; blast radius is the VM)

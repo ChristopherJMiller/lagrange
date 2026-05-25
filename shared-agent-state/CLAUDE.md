@@ -80,9 +80,41 @@ them. See the `cache-debug` skill.
 
 You have passwordless sudo inside this VM. The blast radius is contained to
 this VM — `rm -rf /` here cannot harm the host or other VMs. Use it freely
-for legitimate system-level operations (installing system packages via Nix,
-reading logs, etc.), but do not modify `/nix/store` or `/persistent/` outside
+for legitimate system-level operations (reading logs, restarting services
+you own, etc.), but do not modify `/nix/store` or `/persistent/` outside
 your home directory.
+
+The setuid wrapper is at `/run/wrappers/bin/sudo` and `/run/wrappers/bin` is
+first in `$PATH`. `which sudo` will show the wrapper. The non-setuid copy at
+`/run/current-system/sw/bin/sudo` is just a symlink to the unwrapped store
+binary — if you invoke it directly, sudo will fail with confusing errors
+about setuid that look like a system bug. Use the unqualified `sudo` and
+let PATH resolve.
+
+If `sudo <something>` returns an error, read what failed: sudo itself
+almost certainly succeeded and the underlying command is the one
+complaining. "Sudo isn't working" is rarely the right diagnosis.
+
+## Nix
+
+`nix-daemon` is enabled in this VM, so `nix develop`, `nix flake show`,
+`nix shell nixpkgs#<pkg>`, etc. work normally for the `agent` user.
+
+`/nix/store` is **virtiofs-mounted read-only** from the host. That means:
+
+- **Reads, evals, and entering existing devShells:** work normally.
+- **Building new derivations:** fails (can't write to /nix/store). If a
+  package isn't already in the store, `nix shell nixpkgs#<pkg>` will try
+  to build/substitute and may fail.
+- **Substituting from cache.internal:** works for packages the host has
+  already substituted. Adding new substituters from inside the VM won't
+  help — the daemon writes get rejected.
+
+Practical consequence: if `nix shell nixpkgs#foo` errors with a write
+failure to /nix/store, either the host doesn't have `foo` available or
+the host's cache layer doesn't either. Add the package to the repo's
+`flake.nix` devShell instead so it gets built host-side on the next
+deploy, OR ask the operator to pre-warm the host.
 
 ## When something feels wrong
 
